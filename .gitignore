@@ -1,0 +1,42 @@
+# Qt project files
+*.user
+*.pro.user
+*.pro.user.*
+*.moc
+*.obj
+*.o
+*.a
+*.so
+*.dll
+*.exe
+Makefile*
+*.qmake.stash
+
+# Build directories
+build/
+bin/
+debug/
+release/
+
+# Python files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+venv/
+ENV/
+
+# Project specific data and logs
+data/
+videos/
+imageIndex
+totalSize
+udp_log.txt
+*.log
+
+# IDE files
+.vscode/
+.idea/
+.trae/
