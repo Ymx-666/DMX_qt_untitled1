@@ -52,7 +52,7 @@ private:
 
     struct ImageBuffer {
         uint32_t totalSize = 0;
-        int receivedBytes = 0;
+        uint32_t receivedBytes = 0;
         QByteArray data;
     };
     QMap<uint32_t, ImageBuffer> m_bufferPool;

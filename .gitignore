@@ -18,6 +18,16 @@ bin/
 debug/
 release/
 
+# qmake generated artifacts
+ui_*.h
+object_script.*
+
+# Local build/output dirs created during Windows/MinGW setup
+_build_mingw/
+
+# 3rdparty binaries (downloaded locally; do not commit)
+win_setup_test/3rdparty/
+
 # Python files
 __pycache__/
 *.pyc

@@ -76,7 +76,7 @@ void VideoThread::processPendingDatagrams()
         }
 
         m_bufferPool[imgIdx].data.append(payloadData, payloadSize);
-        m_bufferPool[imgIdx].receivedBytes += payloadSize;
+        m_bufferPool[imgIdx].receivedBytes += static_cast<uint32_t>(payloadSize);
 
         if (m_bufferPool[imgIdx].receivedBytes >= m_bufferPool[imgIdx].totalSize) {
             std::vector<uchar> buf(m_bufferPool[imgIdx].data.begin(), m_bufferPool[imgIdx].data.end());

@@ -39,7 +39,7 @@ private:
     // 组包缓冲池 (Jitter Buffer)：根据 imageIndex 拼装对应的二进制块
     struct ImageBuffer {
         uint32_t totalSize = 0;
-        int receivedBytes = 0;
+        uint32_t receivedBytes = 0;
         QByteArray data;
     };
     QMap<uint32_t, ImageBuffer> m_colorBuffer;

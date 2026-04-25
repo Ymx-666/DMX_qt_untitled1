@@ -1,4 +1,5 @@
-QT       += core gui multimedia multimediawidgets serialport
+include(win_setup_test/win_config.pri)
+QT       += core gui multimedia multimediawidgets serialport network
 # Qt 5.4 版本需要明确包含 widgets 模块
 greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 

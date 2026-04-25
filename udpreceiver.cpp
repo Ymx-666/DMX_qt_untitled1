@@ -97,7 +97,7 @@ void UdpReceiver::processImageChunk(const QByteArray &datagram, int type)
     }
 
     bufferPool[imgIdx].data.append(payloadData, payloadSize);
-    bufferPool[imgIdx].receivedBytes += payloadSize;
+    bufferPool[imgIdx].receivedBytes += static_cast<uint32_t>(payloadSize);
 
     // 判断是否接收完一张完整的 JPG
     if (bufferPool[imgIdx].receivedBytes >= bufferPool[imgIdx].totalSize) {
