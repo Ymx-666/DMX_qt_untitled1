@@ -3,13 +3,61 @@
 #include <QVector>
 #include <QStringList>
 #include <QFileInfo>
+#include <QFile>
+#include <QAbstractSocket>
+#include <QCoreApplication>
+#include <QImageReader>
+#include <QBuffer>
+#include <QTimer>
 #include <QTime>
 #include <opencv2/opencv.hpp>
+
+static QString mapDevicePathToWindowsShare(QString path)
+{
+    if (path.startsWith("file://", Qt::CaseInsensitive)) {
+        path = path.mid(QString("file://").length());
+    }
+
+    if (path.startsWith("/data/")) {
+        path = "\\\\192.168.4.1\\data\\" + path.mid(QString("/data/").length());
+        path.replace("/", "\\");
+    }
+
+    return path;
+}
+
+static bool parsePathPayload(const QString &msg, QString *typeStr, QString *pathStr)
+{
+    if (!typeStr || !pathStr) return false;
+    const QStringList parts = msg.split(";");
+    if (parts.size() < 2) return false;
+
+    const QString t = parts[0].trimmed().toUpper();
+    const QString p = parts[1].trimmed();
+    if (t.isEmpty() || p.isEmpty()) return false;
+
+    *typeStr = t;
+    *pathStr = p;
+    return true;
+}
+
+static QImage readScaledImage(const QString &mappedPath, const QSize &scaledSize)
+{
+    QImageReader reader(mappedPath);
+    reader.setScaledSize(scaledSize);
+    return reader.read();
+}
 
 VideoThread::VideoThread(int type, QObject *parent)
     : QThread(parent), m_type(type), m_running(false), m_dataSocket(nullptr), m_pathSocket(nullptr)
 {
-    qDebug() << "UDP 监听线程已就绪，类型:" << (m_type == 0 ? "彩色(兼管8001路径总机)" : "黑白(纯8002裸流)");
+    QString role;
+    if (m_type == 2) role = "8001 路径门址线程";
+    else if (m_type == 3) role = "8001 彩色解码线程";
+    else if (m_type == 4) role = "8001 黑白解码线程";
+    else if (m_type == 1) role = "8002 黑白裸流线程";
+    else role = "8003 彩色裸流线程";
+    qDebug() << "UDP 监听线程已就绪，类型:" << role;
 }
 
 VideoThread::~VideoThread()
@@ -24,82 +72,428 @@ void VideoThread::stop()
     quit();
 }
 
+void VideoThread::enqueuePathJob(const QString &type, const QString &path)
+{
+    if (m_type != 3 && m_type != 4) return;
+    if (type.isEmpty() || path.isEmpty()) return;
+
+    PathJob job;
+    job.type = type;
+    job.path = path;
+    job.nextTryMs = m_emitTimer.isValid() ? m_emitTimer.elapsed() : 0;
+
+    const int maxQueue = 1024;
+    if (m_type == 3) {
+        if (type != "RGB") return;
+        if (m_rgbJobs.size() >= maxQueue) {
+            m_rgbJobs.dequeue();
+            ++m_totalDroppedPackets;
+        }
+        m_rgbJobs.enqueue(job);
+        return;
+    }
+
+    if (type != "BW" && type != "GRAY") return;
+    if (m_bwJobs.size() >= maxQueue) {
+        m_bwJobs.dequeue();
+        ++m_totalDroppedPackets;
+    }
+    m_bwJobs.enqueue(job);
+}
+
 void VideoThread::run()
 {
     m_running = true;
+    m_emitTimer.start();
+    m_lastTextEmitMs = 0;
+    m_lastStatMs = 0;
+    m_totalRxPackets = 0;
+    m_totalDecodedFrames = 0;
+    m_totalDroppedPackets = 0;
+    m_totalReadFails = 0;
+    m_totalReadyReadCalls = 0;
+    m_totalDatagramsRead = 0;
+    m_lastDatagramLen = 0;
+    m_lastSender.clear();
+    m_lastStatRxPackets = 0;
+    m_lastStatDecodedFrames = 0;
+    m_lastStatDroppedPackets = 0;
+    m_lastStatReadFails = 0;
+    m_lastRxType.clear();
+    m_lastRxPath.clear();
+    m_pendingType.clear();
+    m_pendingPath.clear();
+    m_pendingDirty = false;
+    m_textFrameIndex = 0;
+    m_pathRgbFrameIndex = 0;
+    m_pathBwFrameIndex = 0;
+    m_rgbJobs.clear();
+    m_bwJobs.clear();
+    m_nextDecodeRgb = true;
 
-    // 1. 各自监听自己的裸流数据端口 (8002 和 8003)
-    m_dataSocket = new QUdpSocket();
-    int dataPort = (m_type == 0) ? 8003 : 8002;
-    // 【关键修复 1】：强制使用 AnyIPv4，避免 Linux 默认绑定 IPv6 导致无法接收 IPv4 报文
-    m_dataSocket->bind(QHostAddress::AnyIPv4, dataPort, QUdpSocket::ShareAddress);
-    connect(m_dataSocket, SIGNAL(readyRead()), this, SLOT(processPendingDatagrams()));
+    emit logRequested("系统", QString("监听线程启动 PID=%1").arg(QCoreApplication::applicationPid()), "#00AAAA");
 
-    // 2. 彩色线程(m_type==0)独占 8001 端口，作为“总机调度员”
-    if (m_type == 0) {
+    if (m_type == 2) {
         m_pathSocket = new QUdpSocket();
-        // 【关键修复 2】：强制使用 AnyIPv4 严格对齐物理机/脚本的 0.0.0.0
-        if (m_pathSocket->bind(QHostAddress::AnyIPv4, 8001, QUdpSocket::ShareAddress)) {
-            emit logRequested("系统", "成功绑定 8001 端口 (IPv4)", "#00AAAA");
+        m_pathSocket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, 4 * 1024 * 1024);
+        if (m_pathSocket->bind(QHostAddress::AnyIPv4, 8001, QUdpSocket::DontShareAddress)) {
+            emit logRequested(
+                "系统",
+                QString("成功绑定 8001 (IPv4) local=%1:%2 rcvbuf=%3")
+                    .arg(m_pathSocket->localAddress().toString())
+                    .arg(m_pathSocket->localPort())
+                    .arg(m_pathSocket->socketOption(QAbstractSocket::ReceiveBufferSizeSocketOption).toLongLong()),
+                "#00AAAA"
+            );
         } else {
-            emit logRequested("系统", "错误：8001 端口绑定失败！请确保 Python 测试脚本已关闭！", "#F44336");
+            emit logRequested(
+                "系统",
+                QString("错误：8001 绑定失败 err=%1").arg(m_pathSocket->errorString()),
+                "#F44336"
+            );
         }
-        connect(m_pathSocket, SIGNAL(readyRead()), this, SLOT(processPathDatagrams()));
+        connect(m_pathSocket, SIGNAL(readyRead()), this, SLOT(processPathDatagrams()), Qt::DirectConnection);
+    } else {
+        m_dataSocket = new QUdpSocket();
+        int dataPort = (m_type == 1) ? 8002 : 8003;
+        m_dataSocket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, 4 * 1024 * 1024);
+        if (m_dataSocket->bind(QHostAddress::AnyIPv4, dataPort, QUdpSocket::DontShareAddress)) {
+            emit logRequested(
+                "系统",
+                QString("成功绑定 %1 (IPv4) local=%2:%3 rcvbuf=%4")
+                    .arg(dataPort)
+                    .arg(m_dataSocket->localAddress().toString())
+                    .arg(m_dataSocket->localPort())
+                    .arg(m_dataSocket->socketOption(QAbstractSocket::ReceiveBufferSizeSocketOption).toLongLong()),
+                "#00AAAA"
+            );
+        } else {
+            emit logRequested(
+                "系统",
+                QString("错误：%1 绑定失败 err=%2").arg(dataPort).arg(m_dataSocket->errorString()),
+                "#F44336"
+            );
+        }
+        connect(m_dataSocket, SIGNAL(readyRead()), this, SLOT(processPendingDatagrams()), Qt::DirectConnection);
+    }
+
+    QTimer *statTimer = new QTimer();
+    QTimer *decodeTimer = nullptr;
+    const int statIntervalMs = (m_type == 2) ? 3000 : 5000;
+    statTimer->setInterval(statIntervalMs);
+    connect(statTimer, &QTimer::timeout, statTimer, [this]() {
+        const int port = (m_type == 1) ? 8002 : ((m_type == 0) ? 8003 : 8001);
+        const quint64 rx = m_totalRxPackets - m_lastStatRxPackets;
+        const quint64 ok = m_totalDecodedFrames - m_lastStatDecodedFrames;
+        const quint64 drop = m_totalDroppedPackets - m_lastStatDroppedPackets;
+        const quint64 fail = m_totalReadFails - m_lastStatReadFails;
+        const quint64 rr = m_totalReadyReadCalls;
+        const quint64 dg = m_totalDatagramsRead;
+        m_lastStatRxPackets = m_totalRxPackets;
+        m_lastStatDecodedFrames = m_totalDecodedFrames;
+        m_lastStatDroppedPackets = m_totalDroppedPackets;
+        m_lastStatReadFails = m_totalReadFails;
+
+        const QString tail = (m_lastRxType.isEmpty() || m_lastRxPath.isEmpty())
+            ? QString()
+            : QString(" last=%1;%2").arg(m_lastRxType, mapDevicePathToWindowsShare(m_lastRxPath));
+        const QString io = m_lastSender.isEmpty()
+            ? QString()
+            : QString(" rr=%1 dg=%2 lastdg=%3 from=%4").arg(rr).arg(dg).arg(m_lastDatagramLen).arg(m_lastSender);
+
+        if (m_type == 2) {
+            emit logRequested(QString("RX(%1)").arg(port), QString("pkt=%1%2%3").arg(rx).arg(io).arg(tail), "#00AAAA");
+        } else {
+            emit logRequested(
+                QString("RX(%1)").arg(port),
+                QString("pkt=%1 ok=%2 drop=%3 fail=%4%5%6").arg(rx).arg(ok).arg(drop).arg(fail).arg(io).arg(tail),
+                "#6A9955"
+            );
+        }
+    });
+    statTimer->start();
+
+    if (m_type == 3 || m_type == 4) {
+        decodeTimer = new QTimer();
+        decodeTimer->setInterval(33);
+        connect(decodeTimer, &QTimer::timeout, decodeTimer, [this]() {
+        const qint64 nowMs = m_emitTimer.elapsed();
+        const int maxAttempts = 120;
+
+        auto takeReadyJob = [&](QQueue<PathJob> &q, PathJob *out) -> bool {
+            if (!out) return false;
+            const int n = q.size();
+            for (int i = 0; i < n; ++i) {
+                PathJob job = q.dequeue();
+                if (job.nextTryMs <= nowMs) {
+                    *out = job;
+                    return true;
+                }
+                q.enqueue(job);
+            }
+            return false;
+        };
+
+        auto requeue = [&](QQueue<PathJob> &q, PathJob &job, int delayMs) -> void {
+            job.nextTryMs = nowMs + delayMs;
+            q.enqueue(job);
+        };
+
+        auto processPathJob = [&](PathJob &job) -> bool {
+            const QString mappedPath = mapDevicePathToWindowsShare(job.path);
+            const QFileInfo fi(mappedPath);
+            if (!fi.exists() || fi.size() <= 0) {
+                ++job.attempts;
+                if (job.attempts >= maxAttempts) {
+                    ++m_totalReadFails;
+                    emit logRequested("读取失败", "文件不存在或无权限: " + mappedPath, "#F44336");
+                    return true;
+                }
+                job.stableHits = 0;
+                requeue((job.type == "RGB") ? m_rgbJobs : m_bwJobs, job, 50);
+                return true;
+            }
+
+            const qint64 sz = fi.size();
+            if (job.lastSize >= 0 && job.lastSize == sz) {
+                job.stableHits++;
+            } else {
+                job.lastSize = sz;
+                job.stableHits = 0;
+                ++job.attempts;
+            }
+            if (job.stableHits < 1) {
+                requeue((job.type == "RGB") ? m_rgbJobs : m_bwJobs, job, 20);
+                return true;
+            }
+
+            QFile f(mappedPath);
+            if (!f.open(QIODevice::ReadOnly)) {
+                ++job.attempts;
+                if (job.attempts >= maxAttempts) {
+                    ++m_totalReadFails;
+                    emit logRequested("读取失败", "文件不存在或无权限: " + mappedPath, "#F44336");
+                    return true;
+                }
+                job.stableHits = 0;
+                requeue((job.type == "RGB") ? m_rgbJobs : m_bwJobs, job, 50);
+                return true;
+            }
+            const QByteArray bytes = f.readAll();
+            if (bytes.size() != sz) {
+                ++job.attempts;
+                job.stableHits = 0;
+                requeue((job.type == "RGB") ? m_rgbJobs : m_bwJobs, job, 20);
+                return true;
+            }
+
+            QBuffer buffer;
+            buffer.setData(bytes);
+            if (!buffer.open(QIODevice::ReadOnly)) {
+                ++job.attempts;
+                job.stableHits = 0;
+                requeue((job.type == "RGB") ? m_rgbJobs : m_bwJobs, job, 50);
+                return true;
+            }
+            QImageReader reader(&buffer);
+            reader.setAutoDetectImageFormat(true);
+            const QSize srcSize = reader.size();
+            const bool needRotateCcw90 = (srcSize.width() == 4096 && srcSize.height() == 4096);
+            int scaledW = 256;
+            if (srcSize.width() > 0) scaledW = qMax(1, srcSize.width() / 8);
+            if (needRotateCcw90) {
+                reader.setScaledSize(QSize(scaledW, scaledW));
+            } else {
+                reader.setScaledSize(QSize(scaledW, 240));
+            }
+            QImage img = reader.read();
+            if (img.isNull()) {
+                ++job.attempts;
+                job.stableHits = 0;
+                if (job.attempts >= maxAttempts) {
+                    ++m_totalReadFails;
+                    emit logRequested("读取失败", "图片解码失败: " + mappedPath, "#F44336");
+                    return true;
+                }
+                requeue((job.type == "RGB") ? m_rgbJobs : m_bwJobs, job, 50);
+                return true;
+            }
+
+            if (needRotateCcw90) {
+                img = img.transformed(QTransform().rotate(-90), Qt::FastTransformation);
+                if (!img.isNull() && (img.width() != scaledW || img.height() != 240)) {
+                    img = img.scaled(scaledW, 240, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+                }
+            }
+
+            if (job.type == "RGB") {
+                QImage rgb = img.convertToFormat(QImage::Format_RGB32);
+                emit frameCaptured(rgb.copy(), mappedPath);
+                ++m_totalDecodedFrames;
+                return true;
+            }
+
+            static QVector<QRgb> s_grayTable;
+            if (s_grayTable.isEmpty()) {
+                for (int c = 0; c < 256; ++c) s_grayTable.push_back(qRgb(c, c, c));
+            }
+            QImage gray = img.convertToFormat(QImage::Format_Indexed8);
+            gray.setColorTable(s_grayTable);
+            emit thermalFrameCaptured(gray.copy(), mappedPath);
+            ++m_totalDecodedFrames;
+            return true;
+        };
+
+        PathJob job;
+        if (m_type == 3) {
+            if (!takeReadyJob(m_rgbJobs, &job)) return;
+            processPathJob(job);
+            return;
+        }
+        if (!takeReadyJob(m_bwJobs, &job)) return;
+        processPathJob(job);
+        return;
+
+        if (!m_pendingDirty) return;
+        m_pendingDirty = false;
+
+        const QString typeStr = m_pendingType;
+        const QString pathStr = m_pendingPath;
+        const QString mappedPath = mapDevicePathToWindowsShare(pathStr);
+
+        QImage img = readScaledImage(mappedPath, QSize(256, 240));
+        if (img.isNull()) {
+            ++m_totalReadFails;
+            emit logRequested("读取失败", "文件不存在或无权限: " + mappedPath, "#F44336");
+            return;
+        }
+
+        if (m_type == 1) {
+            static QVector<QRgb> s_grayTable;
+            if (s_grayTable.isEmpty()) {
+                for (int c = 0; c < 256; ++c) s_grayTable.push_back(qRgb(c, c, c));
+            }
+            QImage gray = img.convertToFormat(QImage::Format_Indexed8);
+            gray.setColorTable(s_grayTable);
+            emit frameCaptured(gray.copy(), mappedPath);
+            ++m_totalDecodedFrames;
+            return;
+        }
+
+        if (typeStr.isEmpty()) return;
+        QImage rgb = img.convertToFormat(QImage::Format_RGB32);
+        emit frameCaptured(rgb.copy(), mappedPath);
+        ++m_totalDecodedFrames;
+        });
+        decodeTimer->start();
     }
 
     exec();
 
-    delete m_dataSocket;
+    if (decodeTimer) delete decodeTimer;
+    delete statTimer;
+    if (m_dataSocket) delete m_dataSocket;
     if (m_pathSocket) delete m_pathSocket;
 }
 
 // 裸流二进制组包引擎 (处理 8002/8003)
 void VideoThread::processPendingDatagrams()
 {
+    if (!m_dataSocket) return;
+    ++m_totalReadyReadCalls;
+
+    const int headerSize = (int)sizeof(ImagePacketHeader);
+
+    auto tryHandleTextPath = [&](const QByteArray &datagram) -> bool {
+        const QString msg = QString::fromUtf8(datagram).trimmed();
+        if (msg.isEmpty()) return true;
+
+        QString typeStr;
+        QString pathStr;
+        if (!parsePathPayload(msg, &typeStr, &pathStr)) return true;
+
+        if (m_type == 1) {
+            if (typeStr != "BW" && typeStr != "GRAY") return true;
+        } else {
+            if (typeStr != "RGB") return true;
+        }
+
+        m_lastRxType = typeStr;
+        m_lastRxPath = pathStr;
+        m_pendingType = typeStr;
+        m_pendingPath = pathStr;
+        if (m_pendingDirty) ++m_totalDroppedPackets;
+        m_pendingDirty = true;
+
+        return true;
+    };
+
+    auto handleBinary = [&](const QByteArray &datagram) -> void {
+        if (datagram.size() < headerSize) return;
+
+        const ImagePacketHeader *header = reinterpret_cast<const ImagePacketHeader*>(datagram.constData());
+        if (header->headerCode != 0xFFFF) return;
+
+        const uint32_t imgIdx = header->imageIndex;
+        const int payloadSize = datagram.size() - headerSize;
+        const char *payloadData = datagram.constData() + headerSize;
+
+        ImageBuffer &buf = m_bufferPool[imgIdx];
+        if (buf.totalSize == 0) {
+            buf.totalSize = header->totalSize;
+            buf.data.reserve(header->totalSize);
+        }
+
+        buf.data.append(payloadData, payloadSize);
+        buf.receivedBytes += static_cast<uint32_t>(payloadSize);
+
+        if (buf.receivedBytes < buf.totalSize) return;
+
+        std::vector<uchar> bytes(buf.data.begin(), buf.data.end());
+        m_bufferPool.remove(imgIdx);
+
+        cv::Mat frame = cv::imdecode(bytes, m_type == 1 ? cv::IMREAD_GRAYSCALE : cv::IMREAD_COLOR);
+        if (frame.empty()) return;
+
+        if (m_type == 1) {
+            QImage img((const uchar*)frame.data, frame.cols, frame.rows, frame.step, QImage::Format_Indexed8);
+            static QVector<QRgb> s_grayTable;
+            if (s_grayTable.isEmpty()) {
+                for (int c = 0; c < 256; ++c) s_grayTable.push_back(qRgb(c, c, c));
+            }
+            img.setColorTable(s_grayTable);
+            emit frameCaptured(img.copy(), QString());
+            return;
+        }
+
+        cv::cvtColor(frame, frame, cv::COLOR_BGR2BGRA);
+        QImage img((const uchar*)frame.data, frame.cols, frame.rows, frame.step, QImage::Format_RGB32);
+        emit frameCaptured(img.copy(), QString());
+    };
+
     while (m_dataSocket->hasPendingDatagrams()) {
         QByteArray datagram;
         datagram.resize(m_dataSocket->pendingDatagramSize());
-        m_dataSocket->readDatagram(datagram.data(), datagram.size());
+        QHostAddress sender;
+        quint16 senderPort = 0;
+        const qint64 read = m_dataSocket->readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
+        if (read <= 0) continue;
+        if (read != datagram.size()) datagram.resize((int)read);
+        ++m_totalDatagramsRead;
+        m_lastDatagramLen = datagram.size();
+        m_lastSender = QString("%1:%2").arg(sender.toString()).arg(senderPort);
+        ++m_totalRxPackets;
 
-        if (datagram.size() < (int)sizeof(ImagePacketHeader)) continue;
-
-        const ImagePacketHeader *header = reinterpret_cast<const ImagePacketHeader*>(datagram.constData());
-        if (header->headerCode != 0xFFFF) continue;
-
-        uint32_t imgIdx = header->imageIndex;
-        int payloadSize = datagram.size() - sizeof(ImagePacketHeader);
-        const char *payloadData = datagram.constData() + sizeof(ImagePacketHeader);
-
-        if (!m_bufferPool.contains(imgIdx)) {
-            m_bufferPool[imgIdx].totalSize = header->totalSize;
-            m_bufferPool[imgIdx].data.reserve(header->totalSize);
+        bool isBinary = false;
+        if (datagram.size() >= headerSize) {
+            const ImagePacketHeader *header = reinterpret_cast<const ImagePacketHeader*>(datagram.constData());
+            isBinary = (header->headerCode == 0xFFFF);
         }
 
-        m_bufferPool[imgIdx].data.append(payloadData, payloadSize);
-        m_bufferPool[imgIdx].receivedBytes += static_cast<uint32_t>(payloadSize);
-
-        if (m_bufferPool[imgIdx].receivedBytes >= m_bufferPool[imgIdx].totalSize) {
-            std::vector<uchar> buf(m_bufferPool[imgIdx].data.begin(), m_bufferPool[imgIdx].data.end());
-            cv::Mat frame = cv::imdecode(buf, m_type == 1 ? cv::IMREAD_GRAYSCALE : cv::IMREAD_COLOR);
-
-            if (!frame.empty()) {
-                // 【注意】：严禁在此处使用 cv::resize，保留原始高分辨率数据传给 MainWindow 的内存画板
-                QImage img;
-                if (m_type == 1) {
-                    img = QImage((const uchar*)frame.data, frame.cols, frame.rows, frame.step, QImage::Format_Indexed8);
-                    static QVector<QRgb> s_grayTable;
-                    if (s_grayTable.isEmpty()) {
-                        for (int c = 0; c < 256; ++c) s_grayTable.push_back(qRgb(c, c, c));
-                    }
-                    img.setColorTable(s_grayTable);
-                    emit frameCaptured(img.copy(), imgIdx);
-                } else {
-                    cv::cvtColor(frame, frame, cv::COLOR_BGR2BGRA);
-                    img = QImage((const uchar*)frame.data, frame.cols, frame.rows, frame.step, QImage::Format_RGB32);
-                    emit frameCaptured(img.copy(), imgIdx);
-                }
-            }
-            m_bufferPool.remove(imgIdx);
+        if (isBinary) {
+            handleBinary(datagram);
+        } else {
+            tryHandleTextPath(datagram);
         }
     }
 }
@@ -107,68 +501,30 @@ void VideoThread::processPendingDatagrams()
 // 8001 路径总机：根据 RGB 和 BW 分发数据
 void VideoThread::processPathDatagrams()
 {
+    if (!m_pathSocket) return;
+    ++m_totalReadyReadCalls;
     while (m_pathSocket->hasPendingDatagrams()) {
         QByteArray datagram;
         datagram.resize(m_pathSocket->pendingDatagramSize());
-        m_pathSocket->readDatagram(datagram.data(), datagram.size());
+        QHostAddress sender;
+        quint16 senderPort = 0;
+        const qint64 read = m_pathSocket->readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
+        if (read <= 0) continue;
+        if (read != datagram.size()) datagram.resize((int)read);
+        ++m_totalDatagramsRead;
+        m_lastDatagramLen = datagram.size();
+        m_lastSender = QString("%1:%2").arg(sender.toString()).arg(senderPort);
+        ++m_totalRxPackets;
 
-        QString msg = QString::fromUtf8(datagram).trimmed();
+        const QString msg = QString::fromUtf8(datagram).trimmed();
+        QString typeStr;
+        QString originalPath;
+        if (!parsePathPayload(msg, &typeStr, &originalPath)) continue;
 
-        // 收到数据立即发送给日志侧拉框，用于实时监控硬件发包情况
-        emit logRequested("门址 (8001)", "RAW: " + msg, "#00AAAA");
-
-        QStringList parts = msg.split(";");
-
-        if (parts.size() >= 2) {
-            // 【协议兼容】：强制转大写，处理 rgb -> RGB
-            QString typeStr = parts[0].trimmed().toUpper();
-            QString originalPath = parts[1].trimmed();
-
-            // 【核心修复】：Samba共享文件夹路径映射逻辑
-            // 硬件发来的路径类似于: /data/raw/20260418/RGB/1636/img.jpg
-            // 你的本地挂载点是:   /home/ymx/untitled1/data
-
-            QString linuxPath = originalPath;
-
-            if (linuxPath.startsWith("/data/")) {
-                // 将开头的 "/data/" 替换为你本地的实际挂载根目录 "/home/ymx/untitled1/data/"
-                // 这样中间的 "raw/20260418/RGB/1636/" 目录结构就会被完美保留
-                linuxPath.replace(0, 6, "/home/ymx/untitled1/data/");
-            } else {
-                // 防御性编程：如果硬件发来的格式不规范，退回到只取文件名的老逻辑
-                QString filename = originalPath.contains("/") ? originalPath.section('/', -1) : originalPath.section('\\', -1);
-                linuxPath = "/home/ymx/untitled1/data/" + filename;
-            }
-
-            // 发送给主界面记录（用于后续 ROI 截取）
-            emit pageTablePathReceived(linuxPath);
-
-            cv::Mat frame = cv::imread(linuxPath.toStdString(), cv::IMREAD_COLOR);
-
-            if (!frame.empty()) {
-                // 【注意】：严禁在此处使用 cv::resize，保留原始高分辨率数据传给 MainWindow 的内存画板
-                static int rgb_index = 0;
-                static int bw_index = 0;
-
-                // 根据协议，RGB发给彩色画布，BW发给黑白画布
-                if (typeStr == "RGB") {
-                    cv::cvtColor(frame, frame, cv::COLOR_BGR2BGRA);
-                    QImage img = QImage((const uchar*)frame.data, frame.cols, frame.rows, frame.step, QImage::Format_RGB32);
-                    emit frameCaptured(img.copy(), rgb_index++);
-                } else if (typeStr == "BW" || typeStr == "GRAY") {
-                    cv::cvtColor(frame, frame, cv::COLOR_BGR2GRAY);
-                    QImage img = QImage((const uchar*)frame.data, frame.cols, frame.rows, frame.step, QImage::Format_Indexed8);
-                    static QVector<QRgb> s_grayTable;
-                    if (s_grayTable.isEmpty()) {
-                        for (int c = 0; c < 256; ++c) s_grayTable.push_back(qRgb(c, c, c));
-                    }
-                    img.setColorTable(s_grayTable);
-                    emit thermalFrameCaptured(img.copy(), bw_index++);
-                }
-            } else {
-                // 如果读取失败，在侧拉框打印红色报错，包含最终拼接出的绝对路径
-                emit logRequested("读取失败", "文件不存在或无权限: " + linuxPath, "#F44336");
-            }
-        }
+        const QString mappedPath = mapDevicePathToWindowsShare(originalPath);
+        emit pageTablePathReceived(mappedPath);
+        m_lastRxType = typeStr;
+        m_lastRxPath = originalPath;
+        emit pathJobReceived(typeStr, mappedPath);
     }
 }

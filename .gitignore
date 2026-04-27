@@ -50,3 +50,4 @@ udp_log.txt
 .vscode/
 .idea/
 .trae/
+.aider*

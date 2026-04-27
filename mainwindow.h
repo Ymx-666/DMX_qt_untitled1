@@ -9,8 +9,12 @@
 #include <QAction>
 #include <QTextBrowser> // 用于侧拉日志框
 #include <QDockWidget>  // 用于侧拉日志框
+#include <QElapsedTimer>
 #include <QTime>
 #include <QVector>
+#include <QSet>
+#include <QBitArray>
+#include <QMutex>
 
 // 先引入组件头文件
 #include "panoramawidget.h"
@@ -38,10 +42,12 @@ private slots:
     void onActionSaveVideo();
     void onActionStopCapture();
     void onClearUiClicked();
+    void onSaveFullPanoramaClicked();
+    void onSaveFullPanoramaFinished(bool ok, const QString &msg, const QString &rgbPath, const QString &bwPath);
 
     void onCommandReplyReceived();
-    void onColorFrameReceived(QImage img, int fileIndex);
-    void onThermalFrameReceived(QImage img, int fileIndex);
+    void onColorFrameReceived(QImage img, const QString &path);
+    void onThermalFrameReceived(QImage img, const QString &path);
 
     void onPanoramaClicked(double angle);
     void onRadarClicked(int angle);
@@ -55,7 +61,7 @@ private:
     void setupLogDock(); // 初始化日志界面
 
     void sendCommand(const QString &cmd);
-    void updatePanoramaSlice(const QImage &frame, int fileIndex, int type);
+    void updatePanoramaSliceByAngle(const QImage &frame, double angleDeg, int type);
     QImage fetchRoiFromPageTable(int file_idx, int type);
     void checkTargetDetection(double currentAngle);
     void initSimulatedTargets();
@@ -81,6 +87,7 @@ private:
     // 网络与线程
     QUdpSocket *m_cmdSocket;
     QUdpSocket *m_replySocket;
+    VideoThread *m_pathThread;
     VideoThread *m_colorThread;
     VideoThread *m_thermalThread;
 
@@ -97,7 +104,14 @@ private:
     double m_latestAngle;
     double m_prevCheckAngle;
     QStringList m_imagePaths;
+    QSet<QString> m_imagePathSet;
     QVector<RadarTarget> m_simTargets;
+
+    QElapsedTimer m_perfTimer;
+    qint64 m_lastColorUiMs;
+    qint64 m_lastThermalUiMs;
+    qint64 m_lastDetectMs;
+    qint64 m_lastLogMs;
 
     // 动作项
     QAction *m_actOpenDevice;
@@ -107,7 +121,17 @@ private:
     QAction *m_actSaveVideo;
     QAction *m_actStopCapture;
     QAction *m_actClearImage;
+    QAction *m_actSaveFullPanorama;
     QAction *m_actExit;
+
+    QMutex m_fullSaveMutex;
+    QVector<QString> m_rgbSegPaths;
+    QVector<QString> m_bwSegPaths;
+    QBitArray m_rgbSegFilled;
+    QBitArray m_bwSegFilled;
+    int m_rgbSegments;
+    int m_bwSegments;
+    bool m_isSavingFullPanorama;
 };
 
 #endif // MAINWINDOW_H
