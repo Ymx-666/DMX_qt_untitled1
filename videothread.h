@@ -1,6 +1,7 @@
 #ifndef VIDEOTHREAD_H
 #define VIDEOTHREAD_H
 
+#include <QObject>
 #include <QThread>
 #include <QImage>
 #include <QUdpSocket>
@@ -9,53 +10,44 @@
 #include <QElapsedTimer>
 #include <QString>
 #include <QQueue>
+#include <QTimer>
 
-#pragma pack(push, 1)
-struct ImagePacketHeader {
-    uint16_t headerCode;
-    uint16_t imageType;
-    uint32_t timestamp;
-    uint32_t imageIndex;
-    uint32_t totalSize;
-    uint16_t blockIndex;
-    uint16_t blockSize;
-};
-#pragma pack(pop)
+struct ImagePacketHeader;
 
-class VideoThread : public QThread
+class VideoWorker : public QObject
 {
     Q_OBJECT
 public:
-    explicit VideoThread(int type, QObject *parent = nullptr);
-    ~VideoThread();
+    explicit VideoWorker(int type);
+    ~VideoWorker();
 
+public slots:
+    void start();
     void stop();
+    void enqueuePathJob(const QString &type, const QString &path);
 
 signals:
     void frameCaptured(QImage img, const QString &path);
     void thermalFrameCaptured(QImage img, const QString &path);
     void pageTablePathReceived(QString path);
     void pathJobReceived(const QString &type, const QString &path);
-
-    // 【新增】：用于子线程向主界面的日志框发送系统状态
     void logRequested(const QString &type, const QString &msg, const QString &color);
-
-protected:
-    void run() override;
-
-public slots:
-    void enqueuePathJob(const QString &type, const QString &path);
 
 private slots:
     void processPendingDatagrams();
     void processPathDatagrams();
+    void onStatTick();
+    void onDecodeTick();
 
 private:
     int m_type;
-    bool m_running;
+    bool m_running = false;
 
-    QUdpSocket *m_dataSocket;
-    QUdpSocket *m_pathSocket;
+    QUdpSocket *m_dataSocket = nullptr;
+    QUdpSocket *m_pathSocket = nullptr;
+    QTimer *m_statTimer = nullptr;
+    QTimer *m_decodeTimer = nullptr;
+
     uint32_t m_textFrameIndex = 0;
     uint32_t m_pathRgbFrameIndex = 0;
     uint32_t m_pathBwFrameIndex = 0;
@@ -102,6 +94,39 @@ private:
         QByteArray data;
     };
     QMap<uint32_t, ImageBuffer> m_bufferPool;
+};
+
+class VideoThread : public QThread
+{
+    Q_OBJECT
+public:
+    explicit VideoThread(int type, QObject *parent = nullptr);
+    ~VideoThread();
+
+    void stop();
+
+signals:
+    void frameCaptured(QImage img, const QString &path);
+    void thermalFrameCaptured(QImage img, const QString &path);
+    void pageTablePathReceived(QString path);
+    void pathJobReceived(const QString &type, const QString &path);
+
+    // 【新增】：用于子线程向主界面的日志框发送系统状态
+    void logRequested(const QString &type, const QString &msg, const QString &color);
+
+protected:
+    void run() override;
+
+public slots:
+    void enqueuePathJob(const QString &type, const QString &path);
+
+private slots:
+    void onWorkerLogRequested(const QString &type, const QString &msg, const QString &color);
+
+private:
+    int m_type;
+    bool m_running;
+    VideoWorker *m_worker = nullptr;
 };
 
 #endif // VIDEOTHREAD_H
