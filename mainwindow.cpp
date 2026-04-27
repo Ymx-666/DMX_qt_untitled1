@@ -15,6 +15,7 @@
 #include <QThread>
 #include <QMutexLocker>
 #include <QDataStream>
+#include <QStorageInfo>
 #include <QShortcut>
 #include <QDockWidget> // 用于侧拉框
 #include <QTextBrowser>// 用于显示日志文字
@@ -482,6 +483,7 @@ static bool writeBmp24FromSegments(const QString &outPath, int fullW, int fullH,
         if (errMsg) *errMsg = "无法创建文件: " + outPath;
         return false;
     }
+    bool ok = false;
 
     QDataStream ds(&f);
     ds.setByteOrder(QDataStream::LittleEndian);
@@ -498,18 +500,27 @@ static bool writeBmp24FromSegments(const QString &outPath, int fullW, int fullH,
     ds << quint32((quint32)imageSize);
     ds << qint32(2835) << qint32(2835);
     ds << quint32(0) << quint32(0);
-    f.resize(fileSize);
+    if (!f.resize(fileSize)) {
+        if (errMsg) *errMsg = "预分配失败";
+        f.close();
+        f.remove();
+        return false;
+    }
 
     for (int seg = 0; seg < segCount; ++seg) {
         const QString p = segPaths.at(seg);
         if (p.isEmpty()) {
             if (errMsg) *errMsg = "分片路径为空，无法保存";
+            f.close();
+            f.remove();
             return false;
         }
         QImage img;
         QString loadErr;
         if (!loadImageWithRetry(p, &img, &loadErr)) {
             if (errMsg) *errMsg = loadErr;
+            f.close();
+            f.remove();
             return false;
         }
         if (img.width() != segW || img.height() != fullH) {
@@ -521,6 +532,8 @@ static bool writeBmp24FromSegments(const QString &outPath, int fullW, int fullH,
             const qint64 pos = pixelOffset + (qint64)(fullH - 1 - y) * rowStride + xOffset;
             if (!f.seek(pos)) {
                 if (errMsg) *errMsg = "写入定位失败";
+                f.close();
+                f.remove();
                 return false;
             }
             const uchar *line = img.constScanLine(y);
@@ -528,12 +541,16 @@ static bool writeBmp24FromSegments(const QString &outPath, int fullW, int fullH,
             const qint64 wrote = f.write((const char*)line, need);
             if (wrote != need) {
                 if (errMsg) *errMsg = "写入失败";
+                f.close();
+                f.remove();
                 return false;
             }
         }
     }
     f.close();
-    return true;
+    ok = true;
+    if (!ok) f.remove();
+    return ok;
 }
 
 static bool writeBmp8GrayFromSegments(const QString &outPath, int fullW, int fullH, const QVector<QString> &segPaths, QString *errMsg)
@@ -558,6 +575,7 @@ static bool writeBmp8GrayFromSegments(const QString &outPath, int fullW, int ful
         if (errMsg) *errMsg = "无法创建文件: " + outPath;
         return false;
     }
+    bool ok = false;
 
     QDataStream ds(&f);
     ds.setByteOrder(QDataStream::LittleEndian);
@@ -577,18 +595,27 @@ static bool writeBmp8GrayFromSegments(const QString &outPath, int fullW, int ful
     for (int i = 0; i < 256; ++i) {
         ds << quint8(i) << quint8(i) << quint8(i) << quint8(0);
     }
-    f.resize(fileSize);
+    if (!f.resize(fileSize)) {
+        if (errMsg) *errMsg = "预分配失败";
+        f.close();
+        f.remove();
+        return false;
+    }
 
     for (int seg = 0; seg < segCount; ++seg) {
         const QString p = segPaths.at(seg);
         if (p.isEmpty()) {
             if (errMsg) *errMsg = "分片路径为空，无法保存";
+            f.close();
+            f.remove();
             return false;
         }
         QImage img;
         QString loadErr;
         if (!loadImageWithRetry(p, &img, &loadErr)) {
             if (errMsg) *errMsg = loadErr;
+            f.close();
+            f.remove();
             return false;
         }
         if (img.width() != segW || img.height() != fullH) {
@@ -600,6 +627,8 @@ static bool writeBmp8GrayFromSegments(const QString &outPath, int fullW, int ful
             const qint64 pos = pixelOffset + (qint64)(fullH - 1 - y) * rowStride + xOffset;
             if (!f.seek(pos)) {
                 if (errMsg) *errMsg = "写入定位失败";
+                f.close();
+                f.remove();
                 return false;
             }
             const uchar *line = img.constScanLine(y);
@@ -607,12 +636,16 @@ static bool writeBmp8GrayFromSegments(const QString &outPath, int fullW, int ful
             const qint64 wrote = f.write((const char*)line, need);
             if (wrote != need) {
                 if (errMsg) *errMsg = "写入失败";
+                f.close();
+                f.remove();
                 return false;
             }
         }
     }
     f.close();
-    return true;
+    ok = true;
+    if (!ok) f.remove();
+    return ok;
 }
 
 void MainWindow::onSaveFullPanoramaClicked()
@@ -650,6 +683,28 @@ void MainWindow::onSaveFullPanoramaClicked()
     const QString ts = QDateTime::currentDateTime().toString("yyyy_MM_dd_HH_mm_ss");
     const QString rgbOut = QDir(rgbDir).filePath(ts + "_rgb.bmp");
     const QString bwOut = QDir(bwDir).filePath(ts + "_bw.bmp");
+
+    {
+        const int fullW = 65536;
+        const int fullH = 4096;
+        const qint64 rgbNeed = 54 + (qint64)fullW * fullH * 3;
+        const qint64 bwNeed = (14 + 40 + 256 * 4) + (qint64)fullW * fullH;
+        const qint64 need = rgbNeed + bwNeed + 64ll * 1024 * 1024;
+        QStorageInfo st(QFileInfo(rgbOut).absolutePath());
+        if (st.isValid() && st.isReady() && st.bytesAvailable() > 0 && st.bytesAvailable() < need) {
+            {
+                QMutexLocker locker(&m_fullSaveMutex);
+                m_isSavingFullPanorama = false;
+            }
+            updateUiState();
+            const QString msg = QString("磁盘剩余空间不足（need=%1MB free=%2MB）")
+                .arg(need / (1024 * 1024))
+                .arg(st.bytesAvailable() / (1024 * 1024));
+            addLog("保存全图", "失败: " + msg, "#F44336");
+            if (ui->statusbar) ui->statusbar->showMessage("保存全图失败: " + msg, 5000);
+            return;
+        }
+    }
 
     addLog("保存全图", QString("开始保存快照：%1").arg(ts), "#569CD6");
     if (ui->statusbar) ui->statusbar->showMessage("正在保存全景图快照...", 3000);

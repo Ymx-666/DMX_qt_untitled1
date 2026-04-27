@@ -56,10 +56,18 @@ void TurntableDriver::readData()
     if (newData.isEmpty()) return;
 
     m_rxBuffer.append(newData);
+    if (m_rxBuffer.size() > 4096) {
+        m_rxBuffer = m_rxBuffer.right(512);
+    }
 
     while (m_rxBuffer.size() >= 7) {
         if ((unsigned char)m_rxBuffer.at(0) != 0xFF) {
-            m_rxBuffer.remove(0, 1);
+            const int idx = m_rxBuffer.indexOf(char(0xFF));
+            if (idx < 0) {
+                m_rxBuffer.clear();
+                return;
+            }
+            if (idx > 0) m_rxBuffer.remove(0, idx);
             continue;
         }
 

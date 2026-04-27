@@ -97,8 +97,6 @@ private:
     // 全局数据（已修复重复定义）
     QImage fullPanoramaImage;
     QImage fullThermalPanoramaImage;
-    QImage m_highResColorPanorama;
-    QImage m_highResThermalPanorama;
 
     bool m_isDeviceOpen;
     double m_latestAngle;
