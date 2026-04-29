@@ -4,6 +4,9 @@
 
 AIVideoWidget::AIVideoWidget(QWidget *parent) : QWidget(parent) {
     setMinimumSize(100, 100);
+    setMouseTracking(true);
+    setFocusPolicy(Qt::StrongFocus);
+    setCursor(Qt::PointingHandCursor);
 }
 
 void AIVideoWidget::updateImage(const QImage &img) {
@@ -13,7 +16,9 @@ void AIVideoWidget::updateImage(const QImage &img) {
 
 void AIVideoWidget::mousePressEvent(QMouseEvent *event) {
     // 发出点击坐标信号
+    if (!event) return;
     emit clickedAt(event->pos());
+    QWidget::mousePressEvent(event);
 }
 
 void AIVideoWidget::paintEvent(QPaintEvent *event) {

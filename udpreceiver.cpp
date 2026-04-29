@@ -1,6 +1,7 @@
 #include "udpreceiver.h"
 #include <QDebug>
 #include <QStringList>
+#include <QDateTime>
 #include <opencv2/opencv.hpp>
 
 UdpReceiver::UdpReceiver(QObject *parent) : QObject(parent)
@@ -85,25 +86,69 @@ void UdpReceiver::processImageChunk(const QByteArray &datagram, int type)
     if (header->headerCode != 0xFFFF) return;
 
     QMap<uint32_t, ImageBuffer> &bufferPool = (type == 1) ? m_colorBuffer : m_thermalBuffer;
+    uint32_t &maxSeen = (type == 1) ? m_colorMaxIndexSeen : m_thermalMaxIndexSeen;
+    quint64 &rxCounter = (type == 1) ? m_colorRxCounter : m_thermalRxCounter;
 
     uint32_t imgIdx = header->imageIndex;
     int payloadSize = datagram.size() - sizeof(ImagePacketHeader);
     const char *payloadData = datagram.constData() + sizeof(ImagePacketHeader);
 
-    // 拼装逻辑 (简单版顺序组装，实际工业环境需处理乱序)
-    if (!bufferPool.contains(imgIdx)) {
-        bufferPool[imgIdx].totalSize = header->totalSize;
-        bufferPool[imgIdx].data.reserve(header->totalSize);
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    ++rxCounter;
+
+    if (maxSeen != 0 && imgIdx + 1000U < maxSeen) {
+        bufferPool.clear();
+        maxSeen = imgIdx;
+    } else if (imgIdx > maxSeen) {
+        maxSeen = imgIdx;
     }
 
-    bufferPool[imgIdx].data.append(payloadData, payloadSize);
-    bufferPool[imgIdx].receivedBytes += static_cast<uint32_t>(payloadSize);
+    ImageBuffer &buf = bufferPool[imgIdx];
+    if (buf.totalSize == 0) {
+        buf.totalSize = header->totalSize;
+        buf.data.reserve((int)header->totalSize);
+        buf.createdMs = nowMs;
+        buf.lastUpdateMs = nowMs;
+        buf.lastProgressBytes = 0;
+    }
+
+    if (payloadSize > 0) {
+        buf.data.append(payloadData, payloadSize);
+        buf.receivedBytes += static_cast<uint32_t>(payloadSize);
+        buf.lastUpdateMs = nowMs;
+    }
+
+    if (rxCounter % 64 == 0 || bufferPool.size() > 128) {
+        const uint32_t window = 30;
+        const uint32_t cutoff = (maxSeen > window) ? (maxSeen - window) : 0;
+        auto it = bufferPool.begin();
+        while (it != bufferPool.end() && it.key() < cutoff) {
+            it = bufferPool.erase(it);
+        }
+        const qint64 stallMs = 1500;
+        const qint64 hardMs = 5000;
+        it = bufferPool.begin();
+        while (it != bufferPool.end()) {
+            ImageBuffer &b = it.value();
+            const bool noProgress = (b.receivedBytes == b.lastProgressBytes);
+            if (noProgress) {
+                if ((b.lastUpdateMs > 0 && nowMs - b.lastUpdateMs > stallMs) ||
+                    (b.createdMs > 0 && nowMs - b.createdMs > hardMs)) {
+                    it = bufferPool.erase(it);
+                    continue;
+                }
+            } else {
+                b.lastProgressBytes = b.receivedBytes;
+            }
+            ++it;
+        }
+    }
 
     // 判断是否接收完一张完整的 JPG
-    if (bufferPool[imgIdx].receivedBytes >= bufferPool[imgIdx].totalSize) {
+    if (buf.totalSize > 0 && buf.receivedBytes >= buf.totalSize) {
         // 解码完整 JPG
-        std::vector<uchar> buf(bufferPool[imgIdx].data.begin(), bufferPool[imgIdx].data.end());
-        cv::Mat mat = cv::imdecode(buf, type == 1 ? cv::IMREAD_COLOR : cv::IMREAD_GRAYSCALE);
+        std::vector<uchar> bytes(buf.data.begin(), buf.data.end());
+        cv::Mat mat = cv::imdecode(bytes, type == 1 ? cv::IMREAD_COLOR : cv::IMREAD_GRAYSCALE);
 
         if (!mat.empty()) {
             // 【结合您的新逻辑】：不再切狭缝，直接整张图降维平铺！

@@ -41,9 +41,17 @@ private:
         uint32_t totalSize = 0;
         uint32_t receivedBytes = 0;
         QByteArray data;
+        qint64 createdMs = 0;
+        qint64 lastUpdateMs = 0;
+        uint32_t lastProgressBytes = 0;
     };
     QMap<uint32_t, ImageBuffer> m_colorBuffer;
     QMap<uint32_t, ImageBuffer> m_thermalBuffer;
+
+    uint32_t m_colorMaxIndexSeen = 0;
+    uint32_t m_thermalMaxIndexSeen = 0;
+    quint64 m_colorRxCounter = 0;
+    quint64 m_thermalRxCounter = 0;
 };
 
 #endif // UDPRECEIVER_H

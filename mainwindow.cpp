@@ -8,10 +8,8 @@
 #include <QtMath>
 #include <QTimer>
 #include <QDir>
-#include <QFileInfoList>
 #include <QFile>
 #include <QDateTime>
-#include <QImageReader>
 #include <QThread>
 #include <QMutexLocker>
 #include <QDataStream>
@@ -20,7 +18,14 @@
 #include <QDockWidget> // 用于侧拉框
 #include <QTextBrowser>// 用于显示日志文字
 #include <QTime>       // 用于日志时间戳
-#include <opencv2/opencv.hpp>
+#include <QDialog>
+#include <QScrollArea>
+#include <QKeyEvent>
+#include <QPixmap>
+#include <QStringList>
+#include <QMouseEvent>
+#include <QApplication>
+#include <QDesktopWidget>
 
 // =========================================================
 // 【模块二配置】：硬件网络参数
@@ -28,6 +33,79 @@
 const QString DEVICE_IP = "192.168.4.1"; // 协议中指定的硬件 IP
 const quint16 CMD_PORT_SEND = 5001;      // 控制命令消息端口
 const quint16 CMD_PORT_REPLY = 5002;     // 采集设备返回消息端口
+
+class RoiPopupDialog : public QDialog
+{
+public:
+    explicit RoiPopupDialog(QWidget *parent = nullptr)
+        : QDialog(parent)
+    {
+        setWindowTitle("ROI");
+        resize(1000, 800);
+        m_label = new QLabel();
+        m_label->setBackgroundRole(QPalette::Base);
+        m_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+        m_label->setScaledContents(false);
+
+        m_scroll = new QScrollArea(this);
+        m_scroll->setWidget(m_label);
+        m_scroll->setWidgetResizable(true);
+
+        QVBoxLayout *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->addWidget(m_scroll);
+        setLayout(layout);
+    }
+
+    void setImage(const QImage &img)
+    {
+        m_img = img;
+        m_scale = 1.0;
+        refresh();
+    }
+
+protected:
+    void keyPressEvent(QKeyEvent *event) override
+    {
+        if (!event) return;
+        const int k = event->key();
+        if (k == Qt::Key_Plus || k == Qt::Key_Equal) {
+            m_scale *= 1.25;
+            refresh();
+            return;
+        }
+        if (k == Qt::Key_Minus || k == Qt::Key_Underscore) {
+            m_scale /= 1.25;
+            if (m_scale < 0.05) m_scale = 0.05;
+            refresh();
+            return;
+        }
+        if (k == Qt::Key_0) {
+            m_scale = 1.0;
+            refresh();
+            return;
+        }
+        QDialog::keyPressEvent(event);
+    }
+
+private:
+    void refresh()
+    {
+        if (m_img.isNull() || !m_label) return;
+        QSize targetSize(
+            qMax(1, (int)qRound(m_img.width() * m_scale)),
+            qMax(1, (int)qRound(m_img.height() * m_scale))
+        );
+        QImage scaled = (m_scale == 1.0) ? m_img : m_img.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
+        m_label->setPixmap(QPixmap::fromImage(scaled));
+        m_label->adjustSize();
+    }
+
+    QScrollArea *m_scroll = nullptr;
+    QLabel *m_label = nullptr;
+    QImage m_img;
+    double m_scale = 1.0;
+};
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
@@ -107,6 +185,55 @@ MainWindow::MainWindow(QWidget *parent) :
     bottomLayout->addWidget(radarFeedbackView);
     layout->addLayout(bottomLayout, 2, 0, 1, 2);
 
+    connect(colorRoiView, &AIVideoWidget::clickedAt, this, [=](QPoint) {
+        addLog("ROI", QString("RGB ROI 点击 (hasImg=%1 size=%2x%3)")
+                   .arg(!m_lastColorRoi.isNull())
+                   .arg(m_lastColorRoi.width())
+                   .arg(m_lastColorRoi.height()),
+               "#00AAAA");
+        if (m_lastColorRoi.isNull()) {
+            addLog("ROI", "RGB ROI 点击：当前没有可用ROI数据", "#F44336");
+            if (ui->statusbar) ui->statusbar->showMessage("RGB ROI 暂无数据（请先点击上方全景条获取ROI）", 3000);
+            return;
+        }
+        RoiPopupDialog *dlg = new RoiPopupDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose, true);
+        dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
+        dlg->setWindowTitle("RGB ROI  (+/- 缩放, 0 重置)");
+        dlg->setImage(m_lastColorRoi);
+        if (QApplication::desktop()) {
+            const QRect g = QApplication::desktop()->availableGeometry(this);
+            dlg->move(g.center() - QPoint(dlg->width() / 2, dlg->height() / 2));
+        }
+        dlg->show();
+        dlg->raise();
+        dlg->activateWindow();
+    });
+    connect(thermalRoiView, &AIVideoWidget::clickedAt, this, [=](QPoint) {
+        addLog("ROI", QString("BW ROI 点击 (hasImg=%1 size=%2x%3)")
+                   .arg(!m_lastThermalRoi.isNull())
+                   .arg(m_lastThermalRoi.width())
+                   .arg(m_lastThermalRoi.height()),
+               "#00AAAA");
+        if (m_lastThermalRoi.isNull()) {
+            addLog("ROI", "BW ROI 点击：当前没有可用ROI数据", "#F44336");
+            if (ui->statusbar) ui->statusbar->showMessage("BW ROI 暂无数据（请先点击上方全景条获取ROI）", 3000);
+            return;
+        }
+        RoiPopupDialog *dlg = new RoiPopupDialog(this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose, true);
+        dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
+        dlg->setWindowTitle("BW ROI  (+/- 缩放, 0 重置)");
+        dlg->setImage(m_lastThermalRoi);
+        if (QApplication::desktop()) {
+            const QRect g = QApplication::desktop()->availableGeometry(this);
+            dlg->move(g.center() - QPoint(dlg->width() / 2, dlg->height() / 2));
+        }
+        dlg->show();
+        dlg->raise();
+        dlg->activateWindow();
+    });
+
     // ====================================================================
     // 3. 全局缓存、转台驱动与快捷键初始化
     // ====================================================================
@@ -138,8 +265,9 @@ MainWindow::MainWindow(QWidget *parent) :
 
     connect(m_driver, &TurntableDriver::angleUpdated, this, [=](double realAngle){
         m_latestAngle = realAngle;
-        radarView->setCurrentAngle(realAngle);
-        m_angleLabel->setText(QString("%1°").arg(realAngle, 0, 'f', 2));
+        const double displayAngle = m_zeroAngleInited ? toRelativeAngle(realAngle) : realAngle;
+        radarView->setCurrentAngle(displayAngle);
+        m_angleLabel->setText(QString("%1°").arg(displayAngle, 0, 'f', 2));
     });
 
     connect(m_driver, &TurntableDriver::lapTimeMeasured, this, [=](double lapTime){
@@ -166,37 +294,22 @@ MainWindow::MainWindow(QWidget *parent) :
     // 收到数据时触发解析
     connect(m_replySocket, &QUdpSocket::readyRead, this, &MainWindow::onCommandReplyReceived);
 
-    // ====================================================================
-    // 5. 共享文件路径接收引擎 (8001 端口)
-    // ====================================================================
-    m_imagePaths.clear();
-    m_imagePathSet.clear();
-
+    m_colorThread = new VideoThread(0, this);
+    m_thermalThread = new VideoThread(1, this);
     m_pathThread = new VideoThread(2, this);
-    m_colorThread = new VideoThread(3, this);
-    m_thermalThread = new VideoThread(4, this);
-
-    connect(m_pathThread, &VideoThread::pageTablePathReceived, this, [=](QString path){
-        if (!m_imagePathSet.contains(path)) {
-            m_imagePathSet.insert(path);
-            m_imagePaths.append(path);
-            if (m_imagePathSet.size() > 6000) {
-                m_imagePathSet.clear();
-                m_imagePaths.clear();
-            }
-        }
-    });
 
     // 【新增】：接收子线程汇报的日志
-    connect(m_pathThread, &VideoThread::logRequested, this, &MainWindow::addLog);
     connect(m_colorThread, &VideoThread::logRequested, this, &MainWindow::addLog);
     connect(m_thermalThread, &VideoThread::logRequested, this, &MainWindow::addLog);
-
-    connect(m_pathThread, &VideoThread::pathJobReceived, m_colorThread, &VideoThread::enqueuePathJob, Qt::QueuedConnection);
-    connect(m_pathThread, &VideoThread::pathJobReceived, m_thermalThread, &VideoThread::enqueuePathJob, Qt::QueuedConnection);
+    connect(m_pathThread, &VideoThread::logRequested, this, &MainWindow::addLog);
 
     connect(m_colorThread, &VideoThread::frameCaptured, this, &MainWindow::onColorFrameReceived);
     connect(m_thermalThread, &VideoThread::thermalFrameCaptured, this, &MainWindow::onThermalFrameReceived);
+    connect(m_colorThread, &VideoThread::roiCaptured, this, &MainWindow::onColorRoiCaptured);
+    connect(m_thermalThread, &VideoThread::roiCaptured, this, &MainWindow::onThermalRoiCaptured);
+    connect(m_colorThread, &VideoThread::panoramaSnapshotReady, this, &MainWindow::onRgbPanoramaSnapshotReady);
+    connect(m_thermalThread, &VideoThread::panoramaSnapshotReady, this, &MainWindow::onBwPanoramaSnapshotReady);
+    connect(m_pathThread, &VideoThread::pathReceived, this, &MainWindow::onPathReceived);
 
     m_pathThread->start();
     m_colorThread->start();
@@ -209,10 +322,61 @@ MainWindow::MainWindow(QWidget *parent) :
     initSimulatedTargets();
 }
 
+void MainWindow::mousePressEvent(QMouseEvent *event)
+{
+    if (event) {
+        QWidget *w = childAt(event->pos());
+        if (w && colorRoiView && (w == colorRoiView || colorRoiView->isAncestorOf(w))) {
+            addLog("ROI", QString("RGB ROI click fallback (hasImg=%1 size=%2x%3)")
+                       .arg(!m_lastColorRoi.isNull())
+                       .arg(m_lastColorRoi.width())
+                       .arg(m_lastColorRoi.height()),
+                   "#00AAAA");
+            if (!m_lastColorRoi.isNull()) {
+                RoiPopupDialog *dlg = new RoiPopupDialog(this);
+                dlg->setAttribute(Qt::WA_DeleteOnClose, true);
+                dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
+                dlg->setWindowTitle("RGB ROI  (+/- 缩放, 0 重置)");
+                dlg->setImage(m_lastColorRoi);
+                if (QApplication::desktop()) {
+                    const QRect g = QApplication::desktop()->availableGeometry(this);
+                    dlg->move(g.center() - QPoint(dlg->width() / 2, dlg->height() / 2));
+                }
+                dlg->show();
+                dlg->raise();
+                dlg->activateWindow();
+            }
+            return;
+        }
+        if (w && thermalRoiView && (w == thermalRoiView || thermalRoiView->isAncestorOf(w))) {
+            addLog("ROI", QString("BW ROI click fallback (hasImg=%1 size=%2x%3)")
+                       .arg(!m_lastThermalRoi.isNull())
+                       .arg(m_lastThermalRoi.width())
+                       .arg(m_lastThermalRoi.height()),
+                   "#00AAAA");
+            if (!m_lastThermalRoi.isNull()) {
+                RoiPopupDialog *dlg = new RoiPopupDialog(this);
+                dlg->setAttribute(Qt::WA_DeleteOnClose, true);
+                dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
+                dlg->setWindowTitle("BW ROI  (+/- 缩放, 0 重置)");
+                dlg->setImage(m_lastThermalRoi);
+                if (QApplication::desktop()) {
+                    const QRect g = QApplication::desktop()->availableGeometry(this);
+                    dlg->move(g.center() - QPoint(dlg->width() / 2, dlg->height() / 2));
+                }
+                dlg->show();
+                dlg->raise();
+                dlg->activateWindow();
+            }
+            return;
+        }
+    }
+    QMainWindow::mousePressEvent(event);
+}
+
 MainWindow::~MainWindow()
 {
     if(m_driver) { m_driver->stop(); m_driver->closePort(); }
-    if(m_pathThread) { m_pathThread->stop(); m_pathThread->wait(); }
     if(m_colorThread) { m_colorThread->stop(); m_colorThread->wait(); }
     if(m_thermalThread) { m_thermalThread->stop(); m_thermalThread->wait(); }
     delete ui;
@@ -243,6 +407,7 @@ void MainWindow::addLog(const QString &type, const QString &msg, const QString &
         type.contains("错误") ||
         type.contains("读取失败") ||
         type.contains("系统") ||
+        type.contains("ROI") ||
         type.startsWith("RX(");
     if (!important && (nowMs - m_lastLogMs) < 15) return;
     m_lastLogMs = nowMs;
@@ -390,6 +555,18 @@ void MainWindow::updateUiState()
     }
 }
 
+double MainWindow::toRelativeAngle(double rawAngleDeg)
+{
+    double a = rawAngleDeg;
+    while (a < 0.0) a += 360.0;
+    while (a >= 360.0) a -= 360.0;
+    if (!m_zeroAngleInited) return a;
+    double r = a - m_zeroAngleRaw;
+    while (r < 0.0) r += 360.0;
+    while (r >= 360.0) r -= 360.0;
+    return r;
+}
+
 // ====================================================================
 // 【模块二】：工具栏按钮调用 UDP 发送
 // ====================================================================
@@ -434,44 +611,18 @@ void MainWindow::onActionStopCapture()
     ui->statusbar->showMessage("指令已下发: 停止图像采集！", 2000);
 }
 
-static bool loadImageWithRetry(const QString &path, QImage *outImg, QString *errMsg)
+static bool writeBmp24FromImage(const QString &outPath, int fullW, int fullH, const QImage &srcImg, QString *errMsg)
 {
-    if (!outImg) return false;
-    for (int i = 0; i < 6; ++i) {
-        QFileInfo fi(path);
-        if (!fi.exists()) {
-            QThread::msleep(50);
-            continue;
-        }
-        QImageReader reader(path);
-        reader.setAutoDetectImageFormat(true);
-        QImage img = reader.read();
-        if (!img.isNull()) {
-            const QSize srcSize = img.size();
-            if (srcSize.width() == 4096 && srcSize.height() == 4096) {
-                img = img.transformed(QTransform().rotate(-90), Qt::FastTransformation);
-            }
-            *outImg = img;
-            return true;
-        }
-        QThread::msleep(50);
+    if (srcImg.isNull()) {
+        if (errMsg) *errMsg = "没有可保存的RGB数据";
+        return false;
     }
-    if (errMsg) *errMsg = "读取失败: " + path;
-    return false;
-}
+    QImage img = srcImg;
+    if (img.width() != fullW || img.height() != fullH) {
+        img = img.scaled(fullW, fullH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
+    }
+    img = img.convertToFormat(QImage::Format_RGB888);
 
-static bool writeBmp24FromSegments(const QString &outPath, int fullW, int fullH, const QVector<QString> &segPaths, QString *errMsg)
-{
-    if (segPaths.isEmpty()) {
-        if (errMsg) *errMsg = "没有可保存的分片数据";
-        return false;
-    }
-    const int segCount = segPaths.size();
-    if (fullW % segCount != 0) {
-        if (errMsg) *errMsg = "分片数量与目标宽度不匹配";
-        return false;
-    }
-    const int segW = fullW / segCount;
     const int bytesPerPixel = 3;
     const int rowStride = fullW * bytesPerPixel;
     const int pixelOffset = 54;
@@ -483,7 +634,6 @@ static bool writeBmp24FromSegments(const QString &outPath, int fullW, int fullH,
         if (errMsg) *errMsg = "无法创建文件: " + outPath;
         return false;
     }
-    bool ok = false;
 
     QDataStream ds(&f);
     ds.setByteOrder(QDataStream::LittleEndian);
@@ -500,6 +650,7 @@ static bool writeBmp24FromSegments(const QString &outPath, int fullW, int fullH,
     ds << quint32((quint32)imageSize);
     ds << qint32(2835) << qint32(2835);
     ds << quint32(0) << quint32(0);
+
     if (!f.resize(fileSize)) {
         if (errMsg) *errMsg = "预分配失败";
         f.close();
@@ -507,64 +658,41 @@ static bool writeBmp24FromSegments(const QString &outPath, int fullW, int fullH,
         return false;
     }
 
-    for (int seg = 0; seg < segCount; ++seg) {
-        const QString p = segPaths.at(seg);
-        if (p.isEmpty()) {
-            if (errMsg) *errMsg = "分片路径为空，无法保存";
+    for (int y = 0; y < fullH; ++y) {
+        const qint64 pos = pixelOffset + (qint64)(fullH - 1 - y) * rowStride;
+        if (!f.seek(pos)) {
+            if (errMsg) *errMsg = "写入定位失败";
             f.close();
             f.remove();
             return false;
         }
-        QImage img;
-        QString loadErr;
-        if (!loadImageWithRetry(p, &img, &loadErr)) {
-            if (errMsg) *errMsg = loadErr;
+        const uchar *line = img.constScanLine(y);
+        const qint64 need = (qint64)rowStride;
+        const qint64 wrote = f.write((const char*)line, need);
+        if (wrote != need) {
+            if (errMsg) *errMsg = "写入失败";
             f.close();
             f.remove();
             return false;
-        }
-        if (img.width() != segW || img.height() != fullH) {
-            img = img.scaled(segW, fullH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-        }
-        img = img.convertToFormat(QImage::Format_RGB888);
-        const qint64 xOffset = (qint64)seg * segW * bytesPerPixel;
-        for (int y = 0; y < fullH; ++y) {
-            const qint64 pos = pixelOffset + (qint64)(fullH - 1 - y) * rowStride + xOffset;
-            if (!f.seek(pos)) {
-                if (errMsg) *errMsg = "写入定位失败";
-                f.close();
-                f.remove();
-                return false;
-            }
-            const uchar *line = img.constScanLine(y);
-            const qint64 need = (qint64)segW * bytesPerPixel;
-            const qint64 wrote = f.write((const char*)line, need);
-            if (wrote != need) {
-                if (errMsg) *errMsg = "写入失败";
-                f.close();
-                f.remove();
-                return false;
-            }
         }
     }
+
     f.close();
-    ok = true;
-    if (!ok) f.remove();
-    return ok;
+    return true;
 }
 
-static bool writeBmp8GrayFromSegments(const QString &outPath, int fullW, int fullH, const QVector<QString> &segPaths, QString *errMsg)
+static bool writeBmp8GrayFromImage(const QString &outPath, int fullW, int fullH, const QImage &srcImg, QString *errMsg)
 {
-    if (segPaths.isEmpty()) {
-        if (errMsg) *errMsg = "没有可保存的分片数据";
+    if (srcImg.isNull()) {
+        if (errMsg) *errMsg = "没有可保存的BW数据";
         return false;
     }
-    const int segCount = segPaths.size();
-    if (fullW % segCount != 0) {
-        if (errMsg) *errMsg = "分片数量与目标宽度不匹配";
-        return false;
+    QImage img = srcImg;
+    if (img.width() != fullW || img.height() != fullH) {
+        img = img.scaled(fullW, fullH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
     }
-    const int segW = fullW / segCount;
+    img = img.convertToFormat(QImage::Format_Indexed8);
+
     const int rowStride = fullW;
     const int pixelOffset = 14 + 40 + 256 * 4;
     const qint64 imageSize = (qint64)rowStride * fullH;
@@ -575,7 +703,6 @@ static bool writeBmp8GrayFromSegments(const QString &outPath, int fullW, int ful
         if (errMsg) *errMsg = "无法创建文件: " + outPath;
         return false;
     }
-    bool ok = false;
 
     QDataStream ds(&f);
     ds.setByteOrder(QDataStream::LittleEndian);
@@ -595,6 +722,7 @@ static bool writeBmp8GrayFromSegments(const QString &outPath, int fullW, int ful
     for (int i = 0; i < 256; ++i) {
         ds << quint8(i) << quint8(i) << quint8(i) << quint8(0);
     }
+
     if (!f.resize(fileSize)) {
         if (errMsg) *errMsg = "预分配失败";
         f.close();
@@ -602,58 +730,31 @@ static bool writeBmp8GrayFromSegments(const QString &outPath, int fullW, int ful
         return false;
     }
 
-    for (int seg = 0; seg < segCount; ++seg) {
-        const QString p = segPaths.at(seg);
-        if (p.isEmpty()) {
-            if (errMsg) *errMsg = "分片路径为空，无法保存";
+    for (int y = 0; y < fullH; ++y) {
+        const qint64 pos = pixelOffset + (qint64)(fullH - 1 - y) * rowStride;
+        if (!f.seek(pos)) {
+            if (errMsg) *errMsg = "写入定位失败";
             f.close();
             f.remove();
             return false;
         }
-        QImage img;
-        QString loadErr;
-        if (!loadImageWithRetry(p, &img, &loadErr)) {
-            if (errMsg) *errMsg = loadErr;
+        const uchar *line = img.constScanLine(y);
+        const qint64 need = (qint64)rowStride;
+        const qint64 wrote = f.write((const char*)line, need);
+        if (wrote != need) {
+            if (errMsg) *errMsg = "写入失败";
             f.close();
             f.remove();
             return false;
-        }
-        if (img.width() != segW || img.height() != fullH) {
-            img = img.scaled(segW, fullH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-        }
-        img = img.convertToFormat(QImage::Format_Indexed8);
-        const qint64 xOffset = (qint64)seg * segW;
-        for (int y = 0; y < fullH; ++y) {
-            const qint64 pos = pixelOffset + (qint64)(fullH - 1 - y) * rowStride + xOffset;
-            if (!f.seek(pos)) {
-                if (errMsg) *errMsg = "写入定位失败";
-                f.close();
-                f.remove();
-                return false;
-            }
-            const uchar *line = img.constScanLine(y);
-            const qint64 need = (qint64)segW;
-            const qint64 wrote = f.write((const char*)line, need);
-            if (wrote != need) {
-                if (errMsg) *errMsg = "写入失败";
-                f.close();
-                f.remove();
-                return false;
-            }
         }
     }
+
     f.close();
-    ok = true;
-    if (!ok) f.remove();
-    return ok;
+    return true;
 }
 
 void MainWindow::onSaveFullPanoramaClicked()
 {
-    QVector<QString> rgbPaths;
-    QVector<QString> bwPaths;
-    int rgbSeg = 0;
-    int bwSeg = 0;
     {
         QMutexLocker locker(&m_fullSaveMutex);
         if (m_isSavingFullPanorama) return;
@@ -668,10 +769,7 @@ void MainWindow::onSaveFullPanoramaClicked()
             return;
         }
         m_isSavingFullPanorama = true;
-        rgbPaths = m_rgbSegPaths;
-        bwPaths = m_bwSegPaths;
-        rgbSeg = m_rgbSegments;
-        bwSeg = m_bwSegments;
+        m_pendingSaveSnapshots = 2;
     }
     updateUiState();
 
@@ -683,6 +781,10 @@ void MainWindow::onSaveFullPanoramaClicked()
     const QString ts = QDateTime::currentDateTime().toString("yyyy_MM_dd_HH_mm_ss");
     const QString rgbOut = QDir(rgbDir).filePath(ts + "_rgb.bmp");
     const QString bwOut = QDir(bwDir).filePath(ts + "_bw.bmp");
+    m_pendingSaveRgbPath = rgbOut;
+    m_pendingSaveBwPath = bwOut;
+    m_pendingSaveRgb = QImage();
+    m_pendingSaveBw = QImage();
 
     {
         const int fullW = 65536;
@@ -709,29 +811,8 @@ void MainWindow::onSaveFullPanoramaClicked()
     addLog("保存全图", QString("开始保存快照：%1").arg(ts), "#569CD6");
     if (ui->statusbar) ui->statusbar->showMessage("正在保存全景图快照...", 3000);
 
-    QObject *worker = new QObject();
-    QThread *t = new QThread(this);
-    worker->moveToThread(t);
-    connect(t, &QThread::started, worker, [=]() {
-        const int fullW = 65536;
-        const int fullH = 4096;
-        QString err;
-        bool ok = true;
-        if (rgbSeg <= 0 || bwSeg <= 0) ok = false;
-        if (ok && rgbPaths.size() != rgbSeg) ok = false;
-        if (ok && bwPaths.size() != bwSeg) ok = false;
-        if (ok && !writeBmp24FromSegments(rgbOut, fullW, fullH, rgbPaths, &err)) ok = false;
-        if (ok && !writeBmp8GrayFromSegments(bwOut, fullW, fullH, bwPaths, &err)) ok = false;
-        QMetaObject::invokeMethod(this, "onSaveFullPanoramaFinished", Qt::QueuedConnection,
-                                  Q_ARG(bool, ok),
-                                  Q_ARG(QString, ok ? QString("保存成功") : err),
-                                  Q_ARG(QString, rgbOut),
-                                  Q_ARG(QString, bwOut));
-        t->quit();
-    });
-    connect(t, &QThread::finished, worker, &QObject::deleteLater);
-    connect(t, &QThread::finished, t, &QObject::deleteLater);
-    t->start();
+    if (m_colorThread) m_colorThread->requestPanoramaSnapshot();
+    if (m_thermalThread) m_thermalThread->requestPanoramaSnapshot();
 }
 
 void MainWindow::onSaveFullPanoramaFinished(bool ok, const QString &msg, const QString &rgbPath, const QString &bwPath)
@@ -740,6 +821,11 @@ void MainWindow::onSaveFullPanoramaFinished(bool ok, const QString &msg, const Q
         QMutexLocker locker(&m_fullSaveMutex);
         m_isSavingFullPanorama = false;
     }
+    m_pendingSaveSnapshots = 0;
+    m_pendingSaveRgb = QImage();
+    m_pendingSaveBw = QImage();
+    m_pendingSaveRgbPath.clear();
+    m_pendingSaveBwPath.clear();
     updateUiState();
     if (ok) {
         addLog("保存全图", "完成: " + rgbPath, "#6A9955");
@@ -768,7 +854,16 @@ void MainWindow::onClearUiClicked()
     captureView->updateImage(blackImg);
     radarFeedbackView->updateImage(blackImg);
 
-    m_imagePaths.clear();
+    m_zeroAngleInited = false;
+    m_zeroAngleRaw = 0.0;
+    m_lastColorRoi = QImage();
+    m_lastThermalRoi = QImage();
+    m_pendingRadarFeedback = false;
+    m_pendingSaveSnapshots = 0;
+    m_pendingSaveRgb = QImage();
+    m_pendingSaveBw = QImage();
+    m_pendingSaveRgbPath.clear();
+    m_pendingSaveBwPath.clear();
     if(m_logBrowser) m_logBrowser->clear(); // 清空日志
 
     for(auto& target : m_simTargets) { target.isDetected = false; }
@@ -776,8 +871,6 @@ void MainWindow::onClearUiClicked()
 
     {
         QMutexLocker locker(&m_fullSaveMutex);
-        m_rgbSegPaths.clear();
-        m_bwSegPaths.clear();
         m_rgbSegFilled.clear();
         m_bwSegFilled.clear();
         m_rgbSegments = 0;
@@ -793,15 +886,8 @@ void MainWindow::onPanoramaClicked(double angle)
     panoramaView->setSelectedAngle(angle);
     thermalPanoramaView->setSelectedAngle(angle);
 
-    int global_X = (int)((angle / 360.0) * 65536);
-    int file_idx = 0;
-    if (!m_imagePaths.isEmpty()) { file_idx = (global_X / 2048) % m_imagePaths.size(); }
-
-    QImage colorImg = fetchRoiFromPageTable(file_idx, 0);
-    if (!colorImg.isNull()) colorRoiView->updateImage(colorImg);
-
-    QImage grayImg = fetchRoiFromPageTable(file_idx, 1);
-    if (!grayImg.isNull()) thermalRoiView->updateImage(grayImg);
+    if (m_colorThread) m_colorThread->requestRoi(angle, 0);
+    if (m_thermalThread) m_thermalThread->requestRoi(angle, 1);
 }
 
 void MainWindow::updatePanoramaSliceByAngle(const QImage &frame, double angleDeg, int type)
@@ -830,12 +916,16 @@ void MainWindow::updatePanoramaSliceByAngle(const QImage &frame, double angleDeg
     p.end();
 }
 
-void MainWindow::onColorFrameReceived(QImage img, const QString &path)
+void MainWindow::onColorFrameReceived(QImage img, double angleDeg)
 {
-    if (!path.isEmpty() && !img.isNull() && img.width() > 0) {
+    if (!m_zeroAngleInited) {
+        m_zeroAngleInited = true;
+        m_zeroAngleRaw = m_latestAngle;
+    }
+    if (!img.isNull() && img.width() > 0) {
         const int sliceW = img.width();
         const int segments = qMax(1, fullPanoramaImage.width() / sliceW);
-        double a = m_latestAngle;
+        double a = angleDeg;
         while (a < 0.0) a += 360.0;
         while (a >= 360.0) a -= 360.0;
         int tileIndex = (int)(a / 360.0 * segments);
@@ -852,11 +942,9 @@ void MainWindow::onColorFrameReceived(QImage img, const QString &path)
                                       && m_bwSegFilled.count(true) == m_bwSegments);
             if (m_rgbSegments != segments) {
                 m_rgbSegments = segments;
-                m_rgbSegPaths = QVector<QString>(segments);
                 m_rgbSegFilled = QBitArray(segments, false);
             }
             if (tileIndex >= 0 && tileIndex < m_rgbSegments) {
-                m_rgbSegPaths[tileIndex] = path;
                 m_rgbSegFilled.setBit(tileIndex, true);
             }
             const bool isAllReady = (m_rgbSegments > 0 && m_bwSegments > 0
@@ -872,29 +960,33 @@ void MainWindow::onColorFrameReceived(QImage img, const QString &path)
     const qint64 nowMs = m_perfTimer.isValid() ? m_perfTimer.elapsed() : 0;
     if ((nowMs - m_lastColorUiMs) < 33) return;
     m_lastColorUiMs = nowMs;
-    updatePanoramaSliceByAngle(img, m_latestAngle, 0);
+    updatePanoramaSliceByAngle(img, angleDeg, 0);
 
     if ((nowMs - m_lastDetectMs) >= 120) {
         m_lastDetectMs = nowMs;
-        checkTargetDetection(m_latestAngle);
+        checkTargetDetection(angleDeg);
     }
 
-    if (m_prevCheckAngle > 300.0 && m_latestAngle < 60.0) {
+    if (m_prevCheckAngle > 300.0 && angleDeg < 60.0) {
         bool needReset = false;
         for(auto& target : m_simTargets) {
             if(target.isDetected) { target.isDetected = false; needReset = true; }
         }
         if(needReset) radarView->setTargets(m_simTargets);
     }
-    m_prevCheckAngle = m_latestAngle;
+    m_prevCheckAngle = angleDeg;
 }
 
-void MainWindow::onThermalFrameReceived(QImage img, const QString &path)
+void MainWindow::onThermalFrameReceived(QImage img, double angleDeg)
 {
-    if (!path.isEmpty() && !img.isNull() && img.width() > 0) {
+    if (!m_zeroAngleInited) {
+        m_zeroAngleInited = true;
+        m_zeroAngleRaw = m_latestAngle;
+    }
+    if (!img.isNull() && img.width() > 0) {
         const int sliceW = img.width();
         const int segments = qMax(1, fullThermalPanoramaImage.width() / sliceW);
-        double a = m_latestAngle;
+        double a = angleDeg;
         while (a < 0.0) a += 360.0;
         while (a >= 360.0) a -= 360.0;
         int tileIndex = (int)(a / 360.0 * segments);
@@ -912,11 +1004,9 @@ void MainWindow::onThermalFrameReceived(QImage img, const QString &path)
                                       && m_bwSegFilled.count(true) == m_bwSegments);
             if (m_bwSegments != segments) {
                 m_bwSegments = segments;
-                m_bwSegPaths = QVector<QString>(segments);
                 m_bwSegFilled = QBitArray(segments, false);
             }
             if (tileIndex >= 0 && tileIndex < m_bwSegments) {
-                m_bwSegPaths[tileIndex] = path;
                 m_bwSegFilled.setBit(tileIndex, true);
             }
             const bool isAllReady = (m_rgbSegments > 0 && m_bwSegments > 0
@@ -932,45 +1022,117 @@ void MainWindow::onThermalFrameReceived(QImage img, const QString &path)
     const qint64 nowMs = m_perfTimer.isValid() ? m_perfTimer.elapsed() : 0;
     if ((nowMs - m_lastThermalUiMs) < 33) return;
     m_lastThermalUiMs = nowMs;
-    updatePanoramaSliceByAngle(img, m_latestAngle, 1);
+    updatePanoramaSliceByAngle(img, angleDeg, 1);
 }
 
-QImage MainWindow::fetchRoiFromPageTable(int file_idx, int type)
+void MainWindow::onPathReceived(const QString &type, const QString &path, const QString &sender)
 {
-    if (m_imagePaths.isEmpty() || file_idx >= m_imagePaths.size() || file_idx < 0) return QImage();
-
-    QString path = m_imagePaths.at(file_idx);
-
-    if (type == 1) {
-        cv::Mat mat = cv::imread(path.toStdString(), cv::IMREAD_GRAYSCALE);
-        if(mat.empty()) return QImage();
-        cv::resize(mat, mat, cv::Size(1024, 2048), 0, 0, cv::INTER_AREA);
-        QImage img((const uchar*)mat.data, mat.cols, mat.rows, mat.step, QImage::Format_Indexed8);
-        static QVector<QRgb> s_grayTable;
-        if (s_grayTable.isEmpty()) {
-            for (int i = 0; i < 256; ++i) s_grayTable.push_back(qRgb(i, i, i));
-        }
-        img.setColorTable(s_grayTable);
-        return img.copy();
-    } else {
-        cv::Mat mat = cv::imread(path.toStdString(), cv::IMREAD_COLOR);
-        if(mat.empty()) return QImage();
-        cv::resize(mat, mat, cv::Size(1024, 2048), 0, 0, cv::INTER_AREA);
-        cv::cvtColor(mat, mat, cv::COLOR_BGR2BGRA);
-        QImage img((const uchar*)mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB32);
-        return img.copy();
+    const QString t = type.trimmed().toUpper();
+    if (t == "RGB") {
+        if (m_colorThread) m_colorThread->enqueuePath(t, path, sender);
+        return;
     }
+    if (t == "BW" || t == "GRAY") {
+        if (m_thermalThread) m_thermalThread->enqueuePath(t, path, sender);
+        return;
+    }
+}
+
+void MainWindow::onColorRoiCaptured(QImage img, int tag)
+{
+    if (img.isNull()) return;
+    if (tag == 0) {
+        m_lastColorRoi = img;
+        colorRoiView->updateImage(img);
+        return;
+    }
+    if (tag == 2) {
+        radarFeedbackView->updateImage(img);
+        return;
+    }
+    if (tag == 3) {
+        QImage targetImg = img;
+        QPainter p(&targetImg);
+        p.setPen(QPen(Qt::red, 8));
+        p.drawRect(targetImg.rect().adjusted(8, 8, -8, -8));
+        p.setPen(Qt::green);
+        p.setFont(QFont("Arial", 40, QFont::Bold));
+        p.drawText(40, 80, QString("DETECTED: %1 deg").arg(m_pendingCaptureAngle));
+        p.end();
+        captureView->updateImage(targetImg);
+        return;
+    }
+}
+
+void MainWindow::onThermalRoiCaptured(QImage img, int tag)
+{
+    if (img.isNull()) return;
+    if (tag == 1) {
+        m_lastThermalRoi = img;
+        thermalRoiView->updateImage(img);
+        return;
+    }
+}
+
+void MainWindow::onRgbPanoramaSnapshotReady(QImage img)
+{
+    if (img.isNull()) return;
+    if (m_pendingSaveSnapshots < 0) return;
+    bool stored = false;
+    if (m_pendingSaveRgb.isNull()) {
+        m_pendingSaveRgb = img;
+        stored = true;
+    }
+    if (stored && m_pendingSaveSnapshots > 0) --m_pendingSaveSnapshots;
+    if (m_pendingSaveSnapshots != 0) return;
+    if (m_pendingSaveRgb.isNull() || m_pendingSaveBw.isNull()) return;
+    m_pendingSaveSnapshots = -1;
+
+    const QString rgbOut = m_pendingSaveRgbPath;
+    const QString bwOut = m_pendingSaveBwPath;
+    const QImage rgb = m_pendingSaveRgb;
+    const QImage bw = m_pendingSaveBw;
+
+    QObject *worker = new QObject();
+    QThread *t = new QThread(this);
+    worker->moveToThread(t);
+    connect(t, &QThread::started, worker, [=]() {
+        const int fullW = 65536;
+        const int fullH = 4096;
+        QString err;
+        bool ok = true;
+        if (ok && !writeBmp24FromImage(rgbOut, fullW, fullH, rgb, &err)) ok = false;
+        if (ok && !writeBmp8GrayFromImage(bwOut, fullW, fullH, bw, &err)) ok = false;
+        QMetaObject::invokeMethod(this, "onSaveFullPanoramaFinished", Qt::QueuedConnection,
+                                  Q_ARG(bool, ok),
+                                  Q_ARG(QString, ok ? QString("保存成功") : err),
+                                  Q_ARG(QString, rgbOut),
+                                  Q_ARG(QString, bwOut));
+        t->quit();
+    });
+    connect(t, &QThread::finished, worker, &QObject::deleteLater);
+    connect(t, &QThread::finished, t, &QObject::deleteLater);
+    t->start();
+}
+
+void MainWindow::onBwPanoramaSnapshotReady(QImage img)
+{
+    if (img.isNull()) return;
+    if (m_pendingSaveSnapshots < 0) return;
+    bool stored = false;
+    if (m_pendingSaveBw.isNull()) {
+        m_pendingSaveBw = img;
+        stored = true;
+    }
+    if (stored && m_pendingSaveSnapshots > 0) --m_pendingSaveSnapshots;
+    if (m_pendingSaveSnapshots != 0) return;
+    if (m_pendingSaveRgb.isNull() || m_pendingSaveBw.isNull()) return;
+    onRgbPanoramaSnapshotReady(m_pendingSaveRgb);
 }
 
 void MainWindow::onRadarClicked(int angle)
 {
-    int global_X = (int)((angle / 360.0) * 65536);
-    int file_idx = 0;
-
-    if (!m_imagePaths.isEmpty()) { file_idx = (global_X / 2048) % m_imagePaths.size(); }
-
-    QImage img = fetchRoiFromPageTable(file_idx, 0);
-    if (!img.isNull()) radarFeedbackView->updateImage(img);
+    if (m_colorThread) m_colorThread->requestRoi(angle, 2);
 }
 
 void MainWindow::checkTargetDetection(double currentAngle)
@@ -986,25 +1148,8 @@ void MainWindow::checkTargetDetection(double currentAngle)
             if (diff < tolerance) {
                 target.isDetected = true;
                 targetsChanged = true;
-
-                int global_X = (int)((target.angle / 360.0) * 65536);
-                int file_idx = 0;
-
-                if (!m_imagePaths.isEmpty()) { file_idx = (global_X / 2048) % m_imagePaths.size(); }
-
-                QImage targetImg = fetchRoiFromPageTable(file_idx, 0);
-
-                if (!targetImg.isNull()) {
-                    QPainter p(&targetImg);
-                    p.setPen(QPen(Qt::red, 8));
-                    p.drawRect(targetImg.rect().adjusted(8,8,-8,-8));
-                    p.setPen(Qt::green);
-                    p.setFont(QFont("Arial", 40, QFont::Bold));
-                    p.drawText(40, 80, QString("DETECTED: %1 deg").arg(target.angle));
-                    p.end();
-
-                    captureView->updateImage(targetImg);
-                }
+                m_pendingCaptureAngle = target.angle;
+                if (m_colorThread) m_colorThread->requestRoi(target.angle, 3);
             }
         }
     }

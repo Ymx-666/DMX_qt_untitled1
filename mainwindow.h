@@ -46,8 +46,13 @@ private slots:
     void onSaveFullPanoramaFinished(bool ok, const QString &msg, const QString &rgbPath, const QString &bwPath);
 
     void onCommandReplyReceived();
-    void onColorFrameReceived(QImage img, const QString &path);
-    void onThermalFrameReceived(QImage img, const QString &path);
+    void onColorFrameReceived(QImage img, double angleDeg);
+    void onThermalFrameReceived(QImage img, double angleDeg);
+    void onPathReceived(const QString &type, const QString &path, const QString &sender);
+    void onColorRoiCaptured(QImage img, int tag);
+    void onThermalRoiCaptured(QImage img, int tag);
+    void onRgbPanoramaSnapshotReady(QImage img);
+    void onBwPanoramaSnapshotReady(QImage img);
 
     void onPanoramaClicked(double angle);
     void onRadarClicked(int angle);
@@ -59,12 +64,15 @@ private:
     void createToolBar();
     void updateUiState();
     void setupLogDock(); // 初始化日志界面
+    double toRelativeAngle(double rawAngleDeg);
 
     void sendCommand(const QString &cmd);
     void updatePanoramaSliceByAngle(const QImage &frame, double angleDeg, int type);
-    QImage fetchRoiFromPageTable(int file_idx, int type);
     void checkTargetDetection(double currentAngle);
     void initSimulatedTargets();
+
+protected:
+    void mousePressEvent(QMouseEvent *event) override;
 
 private:
     Ui::MainWindow *ui;
@@ -101,9 +109,17 @@ private:
     bool m_isDeviceOpen;
     double m_latestAngle;
     double m_prevCheckAngle;
-    QStringList m_imagePaths;
-    QSet<QString> m_imagePathSet;
     QVector<RadarTarget> m_simTargets;
+    bool m_zeroAngleInited = false;
+    double m_zeroAngleRaw = 0.0;
+    double m_pendingCaptureAngle = 0.0;
+    QImage m_lastColorRoi;
+    QImage m_lastThermalRoi;
+    QImage m_pendingSaveRgb;
+    QImage m_pendingSaveBw;
+    bool m_pendingRadarFeedback = false;
+    QString m_pendingSaveRgbPath;
+    QString m_pendingSaveBwPath;
 
     QElapsedTimer m_perfTimer;
     qint64 m_lastColorUiMs;
@@ -123,13 +139,12 @@ private:
     QAction *m_actExit;
 
     QMutex m_fullSaveMutex;
-    QVector<QString> m_rgbSegPaths;
-    QVector<QString> m_bwSegPaths;
     QBitArray m_rgbSegFilled;
     QBitArray m_bwSegFilled;
     int m_rgbSegments;
     int m_bwSegments;
     bool m_isSavingFullPanorama;
+    int m_pendingSaveSnapshots = 0;
 };
 
 #endif // MAINWINDOW_H

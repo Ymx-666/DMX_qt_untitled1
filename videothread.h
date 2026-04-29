@@ -9,8 +9,8 @@
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QString>
-#include <QQueue>
 #include <QTimer>
+#include <QReadWriteLock>
 
 struct ImagePacketHeader;
 
@@ -24,20 +24,22 @@ public:
 public slots:
     void start();
     void stop();
-    void enqueuePathJob(const QString &type, const QString &path);
+    void requestRoi(double angleDeg, int tag);
+    void requestPanoramaSnapshot();
+    void enqueuePath(QString typeStr, QString pathStr, QString sender);
 
 signals:
-    void frameCaptured(QImage img, const QString &path);
-    void thermalFrameCaptured(QImage img, const QString &path);
-    void pageTablePathReceived(QString path);
-    void pathJobReceived(const QString &type, const QString &path);
+    void frameCaptured(QImage img, double angleDeg);
+    void thermalFrameCaptured(QImage img, double angleDeg);
+    void pathReceived(const QString &type, const QString &path, const QString &sender);
+    void roiCaptured(QImage img, int tag);
+    void panoramaSnapshotReady(QImage img);
     void logRequested(const QString &type, const QString &msg, const QString &color);
 
 private slots:
     void processPendingDatagrams();
     void processPathDatagrams();
     void onStatTick();
-    void onDecodeTick();
 
 private:
     int m_type;
@@ -46,7 +48,6 @@ private:
     QUdpSocket *m_dataSocket = nullptr;
     QUdpSocket *m_pathSocket = nullptr;
     QTimer *m_statTimer = nullptr;
-    QTimer *m_decodeTimer = nullptr;
 
     uint32_t m_textFrameIndex = 0;
     uint32_t m_pathRgbFrameIndex = 0;
@@ -76,24 +77,24 @@ private:
     QString m_pendingPath;
     bool m_pendingDirty = false;
 
-    struct PathJob {
-        QString type;
-        QString path;
-        qint64 nextTryMs = 0;
-        qint64 lastSize = -1;
-        int stableHits = 0;
-        int attempts = 0;
-    };
-    QQueue<PathJob> m_rgbJobs;
-    QQueue<PathJob> m_bwJobs;
-    bool m_nextDecodeRgb = true;
-
     struct ImageBuffer {
         uint32_t totalSize = 0;
         uint32_t receivedBytes = 0;
         QByteArray data;
+        qint64 createdMs = 0;
+        qint64 lastUpdateMs = 0;
+        uint32_t lastProgressBytes = 0;
     };
     QMap<uint32_t, ImageBuffer> m_bufferPool;
+    uint32_t m_rawMaxIndexSeen = 0;
+    quint64 m_rawRxCounter = 0;
+
+    QImage m_panorama;
+    int m_fullSliceW = 0;
+    int m_fullSliceH = 0;
+
+    QVector<QReadWriteLock*> m_segLocks;
+    int m_lockBuckets = 64;
 };
 
 class VideoThread : public QThread
@@ -106,10 +107,11 @@ public:
     void stop();
 
 signals:
-    void frameCaptured(QImage img, const QString &path);
-    void thermalFrameCaptured(QImage img, const QString &path);
-    void pageTablePathReceived(QString path);
-    void pathJobReceived(const QString &type, const QString &path);
+    void frameCaptured(QImage img, double angleDeg);
+    void thermalFrameCaptured(QImage img, double angleDeg);
+    void pathReceived(const QString &type, const QString &path, const QString &sender);
+    void roiCaptured(QImage img, int tag);
+    void panoramaSnapshotReady(QImage img);
 
     // 【新增】：用于子线程向主界面的日志框发送系统状态
     void logRequested(const QString &type, const QString &msg, const QString &color);
@@ -118,7 +120,9 @@ protected:
     void run() override;
 
 public slots:
-    void enqueuePathJob(const QString &type, const QString &path);
+    void requestRoi(double angleDeg, int tag);
+    void requestPanoramaSnapshot();
+    void enqueuePath(QString typeStr, QString pathStr, QString sender);
 
 private slots:
     void onWorkerLogRequested(const QString &type, const QString &msg, const QString &color);
