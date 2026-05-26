@@ -29,7 +29,10 @@ SOURCES += main.cpp \
     turntablecontroldialog.cpp \
     turntabledriver.cpp \
     udpprotocol.cpp \
-    videothread.cpp
+    videothread.cpp \
+    panoramacache.cpp \
+    panoramasaver.cpp \
+    rawrecorder.cpp
 
 # 4. 项目头文件列表
 HEADERS += mainwindow.h \
@@ -39,7 +42,10 @@ HEADERS += mainwindow.h \
     turntablecontroldialog.h \
     turntabledriver.h \
     udpprotocol.h \
-    videothread.h
+    videothread.h \
+    panoramacache.h \
+    panoramasaver.h \
+    rawrecorder.h
 
 # 5. UI 设计文件
 FORMS += mainwindow.ui

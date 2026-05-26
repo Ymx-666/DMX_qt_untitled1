@@ -1,4 +1,4 @@
-#ifndef AIVIDEOWIDGET_H
+﻿#ifndef AIVIDEOWIDGET_H
 #define AIVIDEOWIDGET_H
 
 #include <QWidget>

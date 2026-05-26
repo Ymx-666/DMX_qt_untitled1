@@ -1,4 +1,4 @@
-#ifndef MAINWINDOW_H
+﻿#ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
 #include <QMainWindow>
@@ -15,6 +15,10 @@
 #include <QSet>
 #include <QBitArray>
 #include <QMutex>
+#include <QTimer>
+#include <QThread>
+#include <QSharedPointer>
+#include <QAtomicInteger>
 
 // 先引入组件头文件
 #include "panoramawidget.h"
@@ -23,8 +27,46 @@
 #include "videothread.h" // 确保能识别 VideoThread 类型
 #include "turntabledriver.h"
 #include "turntablecontroldialog.h"
+#include "panoramacache.h"
+#include "panoramasaver.h"
 
 namespace Ui { class MainWindow; }
+class RawRecorder;
+
+class RoiWorker : public QObject
+{
+    Q_OBJECT
+public:
+    explicit RoiWorker(QSharedPointer<PanoramaCache> cache, QObject *parent = nullptr);
+
+public slots:
+    void requestPreview(double angle);
+    void requestFullRgbScaled(double angle, double scale);
+    void requestFullBwScaled(double angle, double scale);
+
+signals:
+    void previewReady(double angle, const QImage &rgb, const QImage &bwRgb32);
+    void fullScaledReady(bool isBw, double angle, double scale, const QImage &imgRgb32);
+
+private slots:
+    void process();
+
+private:
+    void schedule();
+
+    QSharedPointer<PanoramaCache> m_cache;
+    QMutex m_mtx;
+    QAtomicInteger<int> m_scheduled = 0;
+
+    bool m_pendingPreview = false;
+    bool m_pendingFullRgb = false;
+    bool m_pendingFullBw = false;
+    double m_previewAngle = 0.0;
+    double m_fullRgbAngle = 0.0;
+    double m_fullBwAngle = 0.0;
+    double m_fullRgbScale = 1.0;
+    double m_fullBwScale = 1.0;
+};
 
 class MainWindow : public QMainWindow
 {
@@ -43,22 +85,23 @@ private slots:
     void onActionStopCapture();
     void onClearUiClicked();
     void onSaveFullPanoramaClicked();
-    void onSaveFullPanoramaFinished(bool ok, const QString &msg, const QString &rgbPath, const QString &bwPath);
+    void onSaveFullPanoramaFinished(quint64 saveId, bool ok, const QString &msg, const QString &outDir);
+    void onToggleRecording();
 
     void onCommandReplyReceived();
-    void onColorFrameReceived(QImage img, double angleDeg);
-    void onThermalFrameReceived(QImage img, double angleDeg);
-    void onPathReceived(const QString &type, const QString &path, const QString &sender);
-    void onColorRoiCaptured(QImage img, int tag);
-    void onThermalRoiCaptured(QImage img, int tag);
-    void onRgbPanoramaSnapshotReady(QImage img);
-    void onBwPanoramaSnapshotReady(QImage img);
+    void onPathReceived(const QString &type, const QString &path, const QString &sender, qint64 rxMs);
 
     void onPanoramaClicked(double angle);
     void onRadarClicked(int angle);
+    void onRenderTick();
+    void drainRender();
+    void onThumbRoiReady(double angle, const QImage &rgb, const QImage &bwRgb32);
 
     // 【新增】：日志写入槽函数
     void addLog(const QString &type, const QString &msg, const QString &color);
+
+signals:
+    void savePanoramaRequested(const QString &outDir, int rgbJpegQuality);
 
 private:
     void createToolBar();
@@ -67,7 +110,6 @@ private:
     double toRelativeAngle(double rawAngleDeg);
 
     void sendCommand(const QString &cmd);
-    void updatePanoramaSliceByAngle(const QImage &frame, double angleDeg, int type);
     void checkTargetDetection(double currentAngle);
     void initSimulatedTargets();
 
@@ -103,8 +145,10 @@ private:
     TurntableControlDialog *m_ctrlDialog;
 
     // 全局数据（已修复重复定义）
-    QImage fullPanoramaImage;
-    QImage fullThermalPanoramaImage;
+    QSharedPointer<PanoramaCache> m_panoCache;
+    QAtomicInteger<int> m_renderPending;
+    QImage m_uiThumbRgb;
+    QImage m_uiThumbBw;
 
     bool m_isDeviceOpen;
     double m_latestAngle;
@@ -115,15 +159,11 @@ private:
     double m_pendingCaptureAngle = 0.0;
     QImage m_lastColorRoi;
     QImage m_lastThermalRoi;
-    QImage m_pendingSaveRgb;
-    QImage m_pendingSaveBw;
-    bool m_pendingRadarFeedback = false;
-    QString m_pendingSaveRgbPath;
-    QString m_pendingSaveBwPath;
+    double m_lastRoiAngle = -1.0;
+    double m_pendingPopupRgbAngle = -1.0;
+    double m_pendingPopupBwAngle = -1.0;
 
     QElapsedTimer m_perfTimer;
-    qint64 m_lastColorUiMs;
-    qint64 m_lastThermalUiMs;
     qint64 m_lastDetectMs;
     qint64 m_lastLogMs;
 
@@ -136,15 +176,18 @@ private:
     QAction *m_actStopCapture;
     QAction *m_actClearImage;
     QAction *m_actSaveFullPanorama;
+    QAction *m_actRecord;
     QAction *m_actExit;
 
-    QMutex m_fullSaveMutex;
-    QBitArray m_rgbSegFilled;
-    QBitArray m_bwSegFilled;
-    int m_rgbSegments;
-    int m_bwSegments;
-    bool m_isSavingFullPanorama;
-    int m_pendingSaveSnapshots = 0;
+    QThread *m_saveThread = nullptr;
+    PanoramaSaver *m_saveWorker = nullptr;
+
+    QThread *m_roiThread = nullptr;
+    RoiWorker *m_roiWorker = nullptr;
+
+    QThread *m_recordThread = nullptr;
+    RawRecorder *m_recordWorker = nullptr;
+    bool m_isRecording = false;
 };
 
 #endif // MAINWINDOW_H

@@ -1,4 +1,4 @@
-#include "radarwidget.h"
+﻿#include "radarwidget.h"
 #include <QPainter>
 #include <QtMath>
 #include <QMouseEvent>

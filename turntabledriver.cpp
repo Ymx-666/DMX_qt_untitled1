@@ -1,4 +1,4 @@
-#include "turntabledriver.h"
+﻿#include "turntabledriver.h"
 #include <cmath>
 #include <QDateTime> // 引入时间戳，用于计算精准圈速
 

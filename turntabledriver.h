@@ -1,4 +1,4 @@
-#ifndef TURNTABLEDRIVER_H
+﻿#ifndef TURNTABLEDRIVER_H
 #define TURNTABLEDRIVER_H
 
 #include <QObject>

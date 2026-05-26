@@ -11,47 +11,66 @@
 #include <QString>
 #include <QTimer>
 #include <QReadWriteLock>
+#include <QMutex>
+#include <QSharedPointer>
+#include <QSet>
+#include <QQueue>
+#include <QAtomicInteger>
+#include <QPointer>
+#include <cstdint>
 
 struct ImagePacketHeader;
+class PanoramaCache;
 
 class VideoWorker : public QObject
 {
     Q_OBJECT
 public:
-    explicit VideoWorker(int type);
+    explicit VideoWorker(int type, QSharedPointer<PanoramaCache> cache = {});
     ~VideoWorker();
 
 public slots:
     void start();
     void stop();
-    void requestRoi(double angleDeg, int tag);
-    void requestPanoramaSnapshot();
-    void enqueuePath(QString typeStr, QString pathStr, QString sender);
+    void setCurrentAngle(double angleDeg);
+    void enqueuePath(QString typeStr, QString pathStr, QString sender, double angleDeg, qint64 rxMs);
+    void setRecorder(QObject *recorder);
+    void setRecordingEnabled(bool enabled);
 
 signals:
-    void frameCaptured(QImage img, double angleDeg);
-    void thermalFrameCaptured(QImage img, double angleDeg);
-    void pathReceived(const QString &type, const QString &path, const QString &sender);
-    void roiCaptured(QImage img, int tag);
-    void panoramaSnapshotReady(QImage img);
+    void pathReceived(const QString &type, const QString &path, const QString &sender, qint64 rxMs);
     void logRequested(const QString &type, const QString &msg, const QString &color);
+    void cacheUpdated();
 
 private slots:
-    void processPendingDatagrams();
     void processPathDatagrams();
     void onStatTick();
+    void processOnePathJob();
 
 private:
+    struct PathJob;
+    bool handlePathInternal(PathJob &job, int *retryMs);
+    void noteReadFail(const QString &subType, const QString &detail, const QString &senderIp, qint64 nowMs);
+    void updateSeqState(const QString &subType, quint64 fileIdx, const QString &winPath, qint64 nowMs);
+    void schedulePathJobs(int delayMs);
+
     int m_type;
     bool m_running = false;
 
-    QUdpSocket *m_dataSocket = nullptr;
     QUdpSocket *m_pathSocket = nullptr;
     QTimer *m_statTimer = nullptr;
 
-    uint32_t m_textFrameIndex = 0;
-    uint32_t m_pathRgbFrameIndex = 0;
-    uint32_t m_pathBwFrameIndex = 0;
+
+    struct SeqState {
+        quint64 expected = 0;
+        quint64 dupCount = 0;
+        quint64 reorderCount = 0;
+        quint64 gapCount = 0;
+        quint64 maxGap = 0;
+        quint64 maxReorder = 0;
+    };
+    SeqState m_seqRgb;
+    SeqState m_seqBw;
     QElapsedTimer m_emitTimer;
     qint64 m_lastTextEmitMs = 0;
     qint64 m_lastStatMs = 0;
@@ -71,58 +90,67 @@ private:
     int m_lastDatagramLen = 0;
     QString m_lastSender;
 
+    qint64 m_lastReadFailEmitMs = 0;
+    quint64 m_readFailBurst = 0;
+    QString m_lastReadFailDetail;
+
     QString m_lastRxType;
     QString m_lastRxPath;
     QString m_pendingType;
     QString m_pendingPath;
     bool m_pendingDirty = false;
 
-    struct ImageBuffer {
-        uint32_t totalSize = 0;
-        uint32_t receivedBytes = 0;
-        QByteArray data;
-        qint64 createdMs = 0;
-        qint64 lastUpdateMs = 0;
-        uint32_t lastProgressBytes = 0;
+    struct PathJob {
+        QString type;
+        QString path;
+        QString sender;
+        double angleDeg = 0.0;
+        qint64 rxMs = 0;
+        qint64 firstSeenMs = 0;
+        qint64 lastSize = -1;
+        int tries = 0;
     };
-    QMap<uint32_t, ImageBuffer> m_bufferPool;
-    uint32_t m_rawMaxIndexSeen = 0;
-    quint64 m_rawRxCounter = 0;
+    QMutex m_jobsMtx;
+    QQueue<PathJob> m_jobs;
+    PathJob m_currentJob;
+    bool m_hasCurrentJob = false;
+    QAtomicInteger<int> m_jobsScheduled = 0;
+    QTimer *m_jobsTimer = nullptr;
 
-    QImage m_panorama;
-    int m_fullSliceW = 0;
-    int m_fullSliceH = 0;
+    QSharedPointer<PanoramaCache> m_cache;
+    QPointer<QObject> m_recorder;
+    bool m_recordingEnabled = false;
 
-    QVector<QReadWriteLock*> m_segLocks;
-    int m_lockBuckets = 64;
+    double m_currentAngleDeg = 0.0;
+    double m_prevAngleDeg = 0.0;
+    bool m_hasAngle = false;
+    qint64 m_lastAngleChangeMs = 0;
 };
 
 class VideoThread : public QThread
 {
     Q_OBJECT
 public:
-    explicit VideoThread(int type, QObject *parent = nullptr);
+    explicit VideoThread(int type, QSharedPointer<PanoramaCache> cache = {}, QObject *parent = nullptr);
     ~VideoThread();
 
     void stop();
 
 signals:
-    void frameCaptured(QImage img, double angleDeg);
-    void thermalFrameCaptured(QImage img, double angleDeg);
-    void pathReceived(const QString &type, const QString &path, const QString &sender);
-    void roiCaptured(QImage img, int tag);
-    void panoramaSnapshotReady(QImage img);
+    void pathReceived(const QString &type, const QString &path, const QString &sender, qint64 rxMs);
 
     // 【新增】：用于子线程向主界面的日志框发送系统状态
     void logRequested(const QString &type, const QString &msg, const QString &color);
+    void cacheUpdated();
 
 protected:
     void run() override;
 
 public slots:
-    void requestRoi(double angleDeg, int tag);
-    void requestPanoramaSnapshot();
-    void enqueuePath(QString typeStr, QString pathStr, QString sender);
+    void setCurrentAngle(double angleDeg);
+    void enqueuePath(QString typeStr, QString pathStr, QString sender, double angleDeg, qint64 rxMs);
+    void setRecorder(QObject *recorder);
+    void setRecordingEnabled(bool enabled);
 
 private slots:
     void onWorkerLogRequested(const QString &type, const QString &msg, const QString &color);
@@ -131,6 +159,9 @@ private:
     int m_type;
     bool m_running;
     VideoWorker *m_worker = nullptr;
+    QSharedPointer<PanoramaCache> m_cache;
+    QPointer<QObject> m_recorder;
+    bool m_recordingEnabled = false;
 };
 
 #endif // VIDEOTHREAD_H

@@ -15,9 +15,9 @@
 #include <QDataStream>
 #include <QStorageInfo>
 #include <QShortcut>
-#include <QDockWidget> // 用于侧拉框
-#include <QTextBrowser>// 用于显示日志文字
-#include <QTime>       // 用于日志时间戳
+#include <QDockWidget>
+#include <QTextBrowser>
+#include <QTime>
 #include <QDialog>
 #include <QScrollArea>
 #include <QKeyEvent>
@@ -26,13 +26,21 @@
 #include <QMouseEvent>
 #include <QApplication>
 #include <QDesktopWidget>
+#include <QPointer>
+#include <functional>
+#include <QTextCursor>
+#include <QTextCharFormat>
+#include <QColor>
 
-// =========================================================
-// 【模块二配置】：硬件网络参数
-// =========================================================
-const QString DEVICE_IP = "192.168.4.1"; // 协议中指定的硬件 IP
-const quint16 CMD_PORT_SEND = 5001;      // 控制命令消息端口
-const quint16 CMD_PORT_REPLY = 5002;     // 采集设备返回消息端口
+#include "rawrecorder.h"
+#include "asciipath.h"
+
+static inline QString u8s(const char *s) { return QString::fromUtf8(s); }
+
+
+const QString DEVICE_IP = "192.168.4.1";
+const quint16 CMD_PORT_SEND = 5001;
+const quint16 CMD_PORT_REPLY = 5002;
 
 class RoiPopupDialog : public QDialog
 {
@@ -59,53 +67,184 @@ public:
 
     void setImage(const QImage &img)
     {
-        m_img = img;
-        m_scale = 1.0;
-        refresh();
+        if (img.isNull() || !m_label) return;
+        m_label->setPixmap(QPixmap::fromImage(img));
+        m_label->adjustSize();
     }
 
 protected:
     void keyPressEvent(QKeyEvent *event) override
     {
         if (!event) return;
+        if (event->isAutoRepeat()) return;
         const int k = event->key();
         if (k == Qt::Key_Plus || k == Qt::Key_Equal) {
             m_scale *= 1.25;
-            refresh();
+            if (m_onScale) m_onScale(m_scale);
             return;
         }
         if (k == Qt::Key_Minus || k == Qt::Key_Underscore) {
             m_scale /= 1.25;
             if (m_scale < 0.05) m_scale = 0.05;
-            refresh();
+            if (m_onScale) m_onScale(m_scale);
             return;
         }
         if (k == Qt::Key_0) {
             m_scale = 1.0;
-            refresh();
+            if (m_onScale) m_onScale(m_scale);
             return;
         }
         QDialog::keyPressEvent(event);
     }
 
 private:
-    void refresh()
-    {
-        if (m_img.isNull() || !m_label) return;
-        QSize targetSize(
-            qMax(1, (int)qRound(m_img.width() * m_scale)),
-            qMax(1, (int)qRound(m_img.height() * m_scale))
-        );
-        QImage scaled = (m_scale == 1.0) ? m_img : m_img.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
-        m_label->setPixmap(QPixmap::fromImage(scaled));
-        m_label->adjustSize();
-    }
+    friend class MainWindow;
+    void setScaleCallback(std::function<void(double)> cb) { m_onScale = std::move(cb); }
 
     QScrollArea *m_scroll = nullptr;
     QLabel *m_label = nullptr;
-    QImage m_img;
     double m_scale = 1.0;
+    std::function<void(double)> m_onScale;
 };
+
+RoiWorker::RoiWorker(QSharedPointer<PanoramaCache> cache, QObject *parent)
+    : QObject(parent), m_cache(std::move(cache))
+{
+}
+
+void RoiWorker::requestPreview(double angle)
+{
+    {
+        QMutexLocker lk(&m_mtx);
+        m_pendingPreview = true;
+        m_previewAngle = angle;
+    }
+    schedule();
+}
+
+void RoiWorker::requestFullRgbScaled(double angle, double scale)
+{
+    {
+        QMutexLocker lk(&m_mtx);
+        m_pendingFullRgb = true;
+        m_fullRgbAngle = angle;
+        m_fullRgbScale = scale;
+    }
+    schedule();
+}
+
+void RoiWorker::requestFullBwScaled(double angle, double scale)
+{
+    {
+        QMutexLocker lk(&m_mtx);
+        m_pendingFullBw = true;
+        m_fullBwAngle = angle;
+        m_fullBwScale = scale;
+    }
+    schedule();
+}
+
+void RoiWorker::schedule()
+{
+    if (m_scheduled.testAndSetAcquire(0, 1)) {
+        QMetaObject::invokeMethod(this, "process", Qt::QueuedConnection);
+    }
+}
+
+void RoiWorker::process()
+{
+    m_scheduled.storeRelease(0);
+
+    bool doPreview = false;
+    bool doFullRgb = false;
+    bool doFullBw = false;
+    double previewAngle = 0.0;
+    double fullRgbAngle = 0.0;
+    double fullBwAngle = 0.0;
+    double fullRgbScale = 1.0;
+    double fullBwScale = 1.0;
+
+    {
+        QMutexLocker lk(&m_mtx);
+        doPreview = m_pendingPreview;
+        doFullRgb = m_pendingFullRgb;
+        doFullBw = m_pendingFullBw;
+        previewAngle = m_previewAngle;
+        fullRgbAngle = m_fullRgbAngle;
+        fullBwAngle = m_fullBwAngle;
+        fullRgbScale = m_fullRgbScale;
+        fullBwScale = m_fullBwScale;
+        m_pendingPreview = false;
+        m_pendingFullRgb = false;
+        m_pendingFullBw = false;
+    }
+
+    if (!m_cache) return;
+
+    if (doPreview) {
+        QImage rgb = m_cache->extractThumbRgbSliceByAngle(previewAngle);
+        if (rgb.isNull()) rgb = m_cache->extractThumbRgbSliceByAngle(previewAngle + 180.0);
+        QImage bw = m_cache->extractThumbBwSliceByAngle(previewAngle, true);
+        if (!bw.isNull() && bw.format() == QImage::Format_Indexed8) bw = bw.convertToFormat(QImage::Format_RGB32);
+        emit previewReady(previewAngle, rgb, bw);
+    }
+
+    if (doFullRgb) {
+        QImage rgb = m_cache->extractFullRgbSliceByAngle(fullRgbAngle);
+        if (rgb.isNull()) rgb = m_cache->extractFullRgbSliceByAngle(fullRgbAngle + 180.0);
+        if (rgb.isNull()) {
+            rgb = m_cache->extractThumbRgbSliceByAngle(fullRgbAngle);
+            if (rgb.isNull()) rgb = m_cache->extractThumbRgbSliceByAngle(fullRgbAngle + 180.0);
+        }
+        if (!rgb.isNull()) {
+            const qint64 maxPixels = 40ll * 1024 * 1024;
+            const int maxDim = 16384;
+            const double srcPixels = (double)rgb.width() * (double)rgb.height();
+            double s = fullRgbScale;
+            if (s < 0.05) s = 0.05;
+            const double maxSByPixels = (srcPixels > 1.0) ? qSqrt((double)maxPixels / srcPixels) : 1.0;
+            const double maxSByDim = (double)maxDim / (double)qMax(rgb.width(), rgb.height());
+            double maxS = qMin(maxSByPixels, maxSByDim);
+            if (maxS < 0.05) maxS = 0.05;
+            if (s > maxS) s = maxS;
+            if (s != 1.0) {
+                QSize targetSize(qMax(1, (int)qRound(rgb.width() * s)), qMax(1, (int)qRound(rgb.height() * s)));
+                rgb = rgb.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
+            }
+            fullRgbScale = s;
+        }
+        emit fullScaledReady(false, fullRgbAngle, fullRgbScale, rgb);
+    }
+
+    if (doFullBw) {
+        QImage bw = m_cache->extractFullBwSliceByAngle(fullBwAngle, true);
+        if (bw.isNull()) bw = m_cache->extractThumbBwSliceByAngle(fullBwAngle, true);
+        if (!bw.isNull() && bw.format() == QImage::Format_Indexed8) bw = bw.convertToFormat(QImage::Format_RGB32);
+        if (!bw.isNull() && fullBwScale != 1.0) {
+            const qint64 maxPixels = 40ll * 1024 * 1024;
+            const int maxDim = 16384;
+            const double srcPixels = (double)bw.width() * (double)bw.height();
+            double s = fullBwScale;
+            if (s < 0.05) s = 0.05;
+            const double maxSByPixels = (srcPixels > 1.0) ? qSqrt((double)maxPixels / srcPixels) : 1.0;
+            const double maxSByDim = (double)maxDim / (double)qMax(bw.width(), bw.height());
+            double maxS = qMin(maxSByPixels, maxSByDim);
+            if (maxS < 0.05) maxS = 0.05;
+            if (s > maxS) s = maxS;
+            QSize targetSize(qMax(1, (int)qRound(bw.width() * s)), qMax(1, (int)qRound(bw.height() * s)));
+            bw = bw.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
+            fullBwScale = s;
+        }
+        emit fullScaledReady(true, fullBwAngle, fullBwScale, bw);
+    }
+
+    {
+        QMutexLocker lk(&m_mtx);
+        if (m_pendingPreview || m_pendingFullRgb || m_pendingFullBw) {
+            schedule();
+        }
+    }
+}
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
@@ -116,27 +255,55 @@ MainWindow::MainWindow(QWidget *parent) :
     this->resize(1600, 900);
     m_perfTimer.start();
     m_isDeviceOpen = false;
-    m_lastColorUiMs = 0;
-    m_lastThermalUiMs = 0;
     m_lastDetectMs = 0;
     m_lastLogMs = 0;
-    m_rgbSegments = 0;
-    m_bwSegments = 0;
-    m_isSavingFullPanorama = false;
+    m_renderPending.storeRelease(0);
+    m_panoCache = QSharedPointer<PanoramaCache>(new PanoramaCache());
+    {
+        QImage rgb(8192, 240, QImage::Format_RGB32);
+        rgb.fill(Qt::black);
+        QImage bw(8192, 240, QImage::Format_Indexed8);
+        QVector<QRgb> table;
+        table.reserve(256);
+        for (int i = 0; i < 256; ++i) table.push_back(qRgb(i, i, i));
+        bw.setColorTable(table);
+        bw.fill(0);
+        m_uiThumbRgb = rgb;
+        m_uiThumbBw = bw;
+    }
+    m_saveThread = new QThread(this);
+    m_saveWorker = new PanoramaSaver(m_panoCache);
+    m_saveWorker->moveToThread(m_saveThread);
+    connect(this, &MainWindow::savePanoramaRequested, m_saveWorker, &PanoramaSaver::enqueueSave, Qt::QueuedConnection);
+    connect(m_saveWorker, &PanoramaSaver::saveFinished, this, &MainWindow::onSaveFullPanoramaFinished, Qt::QueuedConnection);
+    connect(m_saveThread, &QThread::finished, m_saveWorker, &QObject::deleteLater);
+    m_saveThread->start();
 
-    // ====================================================================
-    // 1. 初始化顶部主控工具栏
-    // ====================================================================
+    m_roiThread = new QThread(this);
+    m_roiWorker = new RoiWorker(m_panoCache);
+    m_roiWorker->moveToThread(m_roiThread);
+    connect(m_roiThread, &QThread::finished, m_roiWorker, &QObject::deleteLater);
+    connect(m_roiWorker, &RoiWorker::previewReady, this, &MainWindow::onThumbRoiReady, Qt::QueuedConnection);
+    m_roiThread->start();
+
+    m_recordThread = new QThread(this);
+    m_recordWorker = new RawRecorder();
+    m_recordWorker->moveToThread(m_recordThread);
+    connect(m_recordWorker, &RawRecorder::logRequested, this, &MainWindow::addLog, Qt::QueuedConnection);
+    connect(m_recordThread, &QThread::finished, m_recordWorker, &QObject::deleteLater);
+    m_recordThread->start();
+
     createToolBar();
-
-    // ====================================================================
-    // 【新增】：初始化侧拉日志框
-    // ====================================================================
     setupLogDock();
-
-    // ====================================================================
-    // 2. 初始化核心 UI 组件与布局
-    // ====================================================================
+    addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"),
+           QStringLiteral("BUILD exe=%1").arg(QCoreApplication::applicationFilePath()),
+           QStringLiteral("#FFD54F"));
+    addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"),
+           QStringLiteral("BUILD compiled=%1 %2").arg(QStringLiteral(__DATE__), QStringLiteral(__TIME__)),
+           QStringLiteral("#FFD54F"));
+    addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"),
+           QStringLiteral("BUILD saveRoot=E:/.trae/program/DMX_qt/untitled1/data/SAVES recRoot=D:/DMX_data"),
+           QStringLiteral("#FFD54F"));
     QWidget *central = new QWidget(this);
     setCentralWidget(central);
     QGridLayout *layout = new QGridLayout(central);
@@ -186,21 +353,31 @@ MainWindow::MainWindow(QWidget *parent) :
     layout->addLayout(bottomLayout, 2, 0, 1, 2);
 
     connect(colorRoiView, &AIVideoWidget::clickedAt, this, [=](QPoint) {
-        addLog("ROI", QString("RGB ROI 点击 (hasImg=%1 size=%2x%3)")
+        addLog(QStringLiteral("ROI"), QStringLiteral("RGB ROI click (hasImg=%1 size=%2x%3)")
                    .arg(!m_lastColorRoi.isNull())
                    .arg(m_lastColorRoi.width())
                    .arg(m_lastColorRoi.height()),
                "#00AAAA");
-        if (m_lastColorRoi.isNull()) {
-            addLog("ROI", "RGB ROI 点击：当前没有可用ROI数据", "#F44336");
-            if (ui->statusbar) ui->statusbar->showMessage("RGB ROI 暂无数据（请先点击上方全景条获取ROI）", 3000);
+        if (!m_panoCache || m_lastRoiAngle < 0.0) {
+            addLog(QStringLiteral("ROI"), QStringLiteral("RGB ROI: no data"), "#F44336");
+            if (ui->statusbar) ui->statusbar->showMessage(QStringLiteral("RGB ROI: no data"), 3000);
             return;
         }
+        const double angle = m_lastRoiAngle;
         RoiPopupDialog *dlg = new RoiPopupDialog(this);
         dlg->setAttribute(Qt::WA_DeleteOnClose, true);
         dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
-        dlg->setWindowTitle("RGB ROI  (+/- 缩放, 0 重置)");
-        dlg->setImage(m_lastColorRoi);
+        dlg->setWindowTitle(QStringLiteral("RGB ROI  (+/- zoom, 0 reset)"));
+        QPointer<RoiPopupDialog> p = dlg;
+        dlg->setScaleCallback([=](double s) {
+            if (!p || !m_roiWorker) return;
+            QMetaObject::invokeMethod(m_roiWorker, "requestFullRgbScaled", Qt::QueuedConnection, Q_ARG(double, angle), Q_ARG(double, s));
+        });
+        connect(m_roiWorker, &RoiWorker::fullScaledReady, dlg, [=](bool isBw, double a, double, const QImage &img) {
+            if (!p || isBw) return;
+            if (qAbs(a - angle) > 0.001) return;
+            p->setImage(img);
+        }, Qt::QueuedConnection);
         if (QApplication::desktop()) {
             const QRect g = QApplication::desktop()->availableGeometry(this);
             dlg->move(g.center() - QPoint(dlg->width() / 2, dlg->height() / 2));
@@ -208,23 +385,35 @@ MainWindow::MainWindow(QWidget *parent) :
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
+        if (ui->statusbar) ui->statusbar->showMessage(QStringLiteral("Extracting RGB ROI..."), 1200);
+        if (m_roiWorker) QMetaObject::invokeMethod(m_roiWorker, "requestFullRgbScaled", Qt::QueuedConnection, Q_ARG(double, angle), Q_ARG(double, 1.0));
     });
     connect(thermalRoiView, &AIVideoWidget::clickedAt, this, [=](QPoint) {
-        addLog("ROI", QString("BW ROI 点击 (hasImg=%1 size=%2x%3)")
+        addLog(QStringLiteral("ROI"), QStringLiteral("BW ROI click (hasImg=%1 size=%2x%3)")
                    .arg(!m_lastThermalRoi.isNull())
                    .arg(m_lastThermalRoi.width())
                    .arg(m_lastThermalRoi.height()),
                "#00AAAA");
-        if (m_lastThermalRoi.isNull()) {
-            addLog("ROI", "BW ROI 点击：当前没有可用ROI数据", "#F44336");
-            if (ui->statusbar) ui->statusbar->showMessage("BW ROI 暂无数据（请先点击上方全景条获取ROI）", 3000);
+        if (!m_panoCache || m_lastRoiAngle < 0.0) {
+            addLog(QStringLiteral("ROI"), QStringLiteral("BW ROI: no data"), "#F44336");
+            if (ui->statusbar) ui->statusbar->showMessage(QStringLiteral("BW ROI: no data"), 3000);
             return;
         }
+        const double angle = m_lastRoiAngle;
         RoiPopupDialog *dlg = new RoiPopupDialog(this);
         dlg->setAttribute(Qt::WA_DeleteOnClose, true);
         dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
-        dlg->setWindowTitle("BW ROI  (+/- 缩放, 0 重置)");
-        dlg->setImage(m_lastThermalRoi);
+        dlg->setWindowTitle(QStringLiteral("BW ROI  (+/- zoom, 0 reset)"));
+        QPointer<RoiPopupDialog> p = dlg;
+        dlg->setScaleCallback([=](double s) {
+            if (!p || !m_roiWorker) return;
+            QMetaObject::invokeMethod(m_roiWorker, "requestFullBwScaled", Qt::QueuedConnection, Q_ARG(double, angle), Q_ARG(double, s));
+        });
+        connect(m_roiWorker, &RoiWorker::fullScaledReady, dlg, [=](bool isBw, double a, double, const QImage &img) {
+            if (!p || !isBw) return;
+            if (qAbs(a - angle) > 0.001) return;
+            p->setImage(img);
+        }, Qt::QueuedConnection);
         if (QApplication::desktop()) {
             const QRect g = QApplication::desktop()->availableGeometry(this);
             dlg->move(g.center() - QPoint(dlg->width() / 2, dlg->height() / 2));
@@ -232,28 +421,19 @@ MainWindow::MainWindow(QWidget *parent) :
         dlg->show();
         dlg->raise();
         dlg->activateWindow();
+        if (ui->statusbar) ui->statusbar->showMessage(QStringLiteral("Extracting BW ROI..."), 1200);
+        if (m_roiWorker) QMetaObject::invokeMethod(m_roiWorker, "requestFullBwScaled", Qt::QueuedConnection, Q_ARG(double, angle), Q_ARG(double, 1.0));
     });
 
-    // ====================================================================
-    // 3. 全局缓存、转台驱动与快捷键初始化
-    // ====================================================================
-    fullPanoramaImage = QImage(8192, 240, QImage::Format_RGB32);
-    fullPanoramaImage.fill(Qt::black);
-    panoramaView->updateImage(fullPanoramaImage);
-
-    fullThermalPanoramaImage = QImage(8192, 240, QImage::Format_RGB32);
-    fullThermalPanoramaImage.fill(Qt::black);
-    thermalPanoramaView->updateImage(fullThermalPanoramaImage);
+    {
+        QImage blackRgb(8192, 240, QImage::Format_RGB32);
+        blackRgb.fill(Qt::black);
+        panoramaView->updateImage(blackRgb);
+        thermalPanoramaView->updateImage(blackRgb);
+    }
 
     m_latestAngle = 0.0;
     m_prevCheckAngle = 0.0;
-
-    QTimer *renderTimer = new QTimer(this);
-    connect(renderTimer, &QTimer::timeout, this, [=]() {
-        if (panoramaView) panoramaView->updateImage(fullPanoramaImage);
-        if (thermalPanoramaView) thermalPanoramaView->updateImage(fullThermalPanoramaImage);
-    });
-    renderTimer->start(66);
 
     m_driver = new TurntableDriver(this);
     m_ctrlDialog = new TurntableControlDialog(m_driver, this);
@@ -264,10 +444,35 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(shortcutCtrlR, &QShortcut::activated, this, &MainWindow::onClearUiClicked);
 
     connect(m_driver, &TurntableDriver::angleUpdated, this, [=](double realAngle){
-        m_latestAngle = realAngle;
-        const double displayAngle = m_zeroAngleInited ? toRelativeAngle(realAngle) : realAngle;
+        if (!m_zeroAngleInited) {
+            m_zeroAngleInited = true;
+            m_zeroAngleRaw = realAngle;
+        }
+        const double displayAngle = toRelativeAngle(realAngle);
+        m_latestAngle = displayAngle;
         radarView->setCurrentAngle(displayAngle);
         m_angleLabel->setText(QString("%1°").arg(displayAngle, 0, 'f', 2));
+        if (m_colorThread) m_colorThread->setCurrentAngle(displayAngle);
+        if (m_thermalThread) m_thermalThread->setCurrentAngle(displayAngle);
+
+        static bool speedInit = false;
+        static double prevA = 0.0;
+        static qint64 prevMs = 0;
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        if (!speedInit) {
+            speedInit = true;
+            prevA = displayAngle;
+            prevMs = nowMs;
+            return;
+        }
+        const qint64 dtMs = nowMs - prevMs;
+        if (dtMs <= 0) return;
+        double diff = qAbs(displayAngle - prevA);
+        if (diff > 180.0) diff = 360.0 - diff;
+        const double dtSec = (double)dtMs / 1000.0;
+        const double degPerSec = (dtSec > 0.0001) ? (diff / dtSec) : 0.0;
+        prevA = displayAngle;
+        prevMs = nowMs;
     });
 
     connect(m_driver, &TurntableDriver::lapTimeMeasured, this, [=](double lapTime){
@@ -275,45 +480,42 @@ MainWindow::MainWindow(QWidget *parent) :
     });
 
     // ====================================================================
-    // 4. 【模块二】：UDP 指令控制引擎初始化 (5001发 / 5002收)
-    // ====================================================================
     m_cmdSocket = new QUdpSocket(this);
     m_replySocket = new QUdpSocket(this);
 
-    addLog("系统", QString("指令控制准备就绪，目标: %1").arg(DEVICE_IP), "#569CD6");
+    addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), u8s("\xE6\x8C\x87\xE4\xBB\xA4\xE6\x8E\xA7\xE5\x88\xB6\xE5\x87\x86\xE5\xA4\x87\xE5\xB0\xB1\xE7\xBB\xAA\xEF\xBC\x8C\xE7\x9B\xAE\xE6\xA0\x87\x3A\x20\x25\x31").arg(DEVICE_IP), "#569CD6");
 
-    // 绑定 5002 端口监听硬件返回值
+    // bind 5002
     if (m_replySocket->bind(QHostAddress::AnyIPv4, CMD_PORT_REPLY, QUdpSocket::ShareAddress)) {
-        qDebug() << ">>> [UDP系统] 成功绑定本地 5002 端口，监听设备回复...";
-        addLog("系统", "成功绑定 5002 端口，监听设备应答", "#6A9955");
+        qDebug() << ">>> [UDP] bind 5002 ok";
+        addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), u8s("\xE6\x88\x90\xE5\x8A\x9F\xE7\xBB\x91\xE5\xAE\x9A\x20\x35\x30\x30\x32\x20\xE7\xAB\xAF\xE5\x8F\xA3\xEF\xBC\x8C\xE7\x9B\x91\xE5\x90\xAC\xE8\xAE\xBE\xE5\xA4\x87\xE5\xBA\x94\xE7\xAD\x94"), "#6A9955");
     } else {
-        qDebug() << ">>> [UDP系统] 错误：无法绑定 5002 端口！";
-        addLog("系统", "错误：无法绑定 5002 端口", "#F44336");
+        qDebug() << ">>> [UDP] bind 5002 failed";
+        addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), u8s("\xE9\x94\x99\xE8\xAF\xAF\xEF\xBC\x9A\xE6\x97\xA0\xE6\xB3\x95\xE7\xBB\x91\xE5\xAE\x9A\x20\x35\x30\x30\x32\x20\xE7\xAB\xAF\xE5\x8F\xA3"), "#F44336");
     }
 
-    // 收到数据时触发解析
     connect(m_replySocket, &QUdpSocket::readyRead, this, &MainWindow::onCommandReplyReceived);
 
-    m_colorThread = new VideoThread(0, this);
-    m_thermalThread = new VideoThread(1, this);
-    m_pathThread = new VideoThread(2, this);
+    m_colorThread = new VideoThread(0, m_panoCache, this);
+    m_thermalThread = new VideoThread(1, m_panoCache, this);
+    m_pathThread = new VideoThread(2, QSharedPointer<PanoramaCache>(), this);
+    if (m_recordWorker) {
+        m_colorThread->setRecorder(m_recordWorker);
+        m_thermalThread->setRecorder(m_recordWorker);
+    }
 
-    // 【新增】：接收子线程汇报的日志
     connect(m_colorThread, &VideoThread::logRequested, this, &MainWindow::addLog);
     connect(m_thermalThread, &VideoThread::logRequested, this, &MainWindow::addLog);
     connect(m_pathThread, &VideoThread::logRequested, this, &MainWindow::addLog);
 
-    connect(m_colorThread, &VideoThread::frameCaptured, this, &MainWindow::onColorFrameReceived);
-    connect(m_thermalThread, &VideoThread::thermalFrameCaptured, this, &MainWindow::onThermalFrameReceived);
-    connect(m_colorThread, &VideoThread::roiCaptured, this, &MainWindow::onColorRoiCaptured);
-    connect(m_thermalThread, &VideoThread::roiCaptured, this, &MainWindow::onThermalRoiCaptured);
-    connect(m_colorThread, &VideoThread::panoramaSnapshotReady, this, &MainWindow::onRgbPanoramaSnapshotReady);
-    connect(m_thermalThread, &VideoThread::panoramaSnapshotReady, this, &MainWindow::onBwPanoramaSnapshotReady);
-    connect(m_pathThread, &VideoThread::pathReceived, this, &MainWindow::onPathReceived);
+    connect(m_pathThread, &VideoThread::pathReceived, this, &MainWindow::onPathReceived, Qt::QueuedConnection);
 
     m_pathThread->start();
     m_colorThread->start();
     m_thermalThread->start();
+
+    connect(m_colorThread, &VideoThread::cacheUpdated, this, &MainWindow::onRenderTick, Qt::QueuedConnection);
+    connect(m_thermalThread, &VideoThread::cacheUpdated, this, &MainWindow::onRenderTick, Qt::QueuedConnection);
 
     connect(panoramaView, SIGNAL(angleSelected(double)), this, SLOT(onPanoramaClicked(double)));
     connect(thermalPanoramaView, SIGNAL(angleSelected(double)), this, SLOT(onPanoramaClicked(double)));
@@ -324,74 +526,35 @@ MainWindow::MainWindow(QWidget *parent) :
 
 void MainWindow::mousePressEvent(QMouseEvent *event)
 {
-    if (event) {
-        QWidget *w = childAt(event->pos());
-        if (w && colorRoiView && (w == colorRoiView || colorRoiView->isAncestorOf(w))) {
-            addLog("ROI", QString("RGB ROI click fallback (hasImg=%1 size=%2x%3)")
-                       .arg(!m_lastColorRoi.isNull())
-                       .arg(m_lastColorRoi.width())
-                       .arg(m_lastColorRoi.height()),
-                   "#00AAAA");
-            if (!m_lastColorRoi.isNull()) {
-                RoiPopupDialog *dlg = new RoiPopupDialog(this);
-                dlg->setAttribute(Qt::WA_DeleteOnClose, true);
-                dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
-                dlg->setWindowTitle("RGB ROI  (+/- 缩放, 0 重置)");
-                dlg->setImage(m_lastColorRoi);
-                if (QApplication::desktop()) {
-                    const QRect g = QApplication::desktop()->availableGeometry(this);
-                    dlg->move(g.center() - QPoint(dlg->width() / 2, dlg->height() / 2));
-                }
-                dlg->show();
-                dlg->raise();
-                dlg->activateWindow();
-            }
-            return;
-        }
-        if (w && thermalRoiView && (w == thermalRoiView || thermalRoiView->isAncestorOf(w))) {
-            addLog("ROI", QString("BW ROI click fallback (hasImg=%1 size=%2x%3)")
-                       .arg(!m_lastThermalRoi.isNull())
-                       .arg(m_lastThermalRoi.width())
-                       .arg(m_lastThermalRoi.height()),
-                   "#00AAAA");
-            if (!m_lastThermalRoi.isNull()) {
-                RoiPopupDialog *dlg = new RoiPopupDialog(this);
-                dlg->setAttribute(Qt::WA_DeleteOnClose, true);
-                dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
-                dlg->setWindowTitle("BW ROI  (+/- 缩放, 0 重置)");
-                dlg->setImage(m_lastThermalRoi);
-                if (QApplication::desktop()) {
-                    const QRect g = QApplication::desktop()->availableGeometry(this);
-                    dlg->move(g.center() - QPoint(dlg->width() / 2, dlg->height() / 2));
-                }
-                dlg->show();
-                dlg->raise();
-                dlg->activateWindow();
-            }
-            return;
-        }
-    }
     QMainWindow::mousePressEvent(event);
 }
 
 MainWindow::~MainWindow()
 {
     if(m_driver) { m_driver->stop(); m_driver->closePort(); }
+    if(m_pathThread) { m_pathThread->stop(); m_pathThread->wait(); }
     if(m_colorThread) { m_colorThread->stop(); m_colorThread->wait(); }
     if(m_thermalThread) { m_thermalThread->stop(); m_thermalThread->wait(); }
+    if (m_saveThread) { m_saveThread->quit(); m_saveThread->wait(); }
+    if (m_roiThread) { m_roiThread->quit(); m_roiThread->wait(); }
+    if (m_recordThread) { m_recordThread->quit(); m_recordThread->wait(); }
     delete ui;
 }
 
-// ====================================================================
-// 【新增】：日志模块实现
-// ====================================================================
 void MainWindow::setupLogDock()
 {
-    QDockWidget *dock = new QDockWidget("系统通信日志", this);
+    QDockWidget *dock = new QDockWidget(u8s("\xE7\xB3\xBB\xE7\xBB\x9F\xE9\x80\x9A\xE4\xBF\xA1\xE6\x97\xA5\xE5\xBF\x97"), this);
     dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
 
     m_logBrowser = new QTextBrowser(dock);
-    m_logBrowser->setStyleSheet("background-color: #1E1E1E; color: #D4D4D4; font-family: 'Consolas', 'Monospace'; font-size: 10pt;");
+    m_logBrowser->setStyleSheet("background-color: #1E1E1E; color: #D4D4D4; font-family: 'Consolas','Microsoft YaHei','Microsoft YaHei UI','SimSun','NSimSun',monospace; font-size: 10pt;");
+    {
+        QFont f(QStringLiteral("Consolas"));
+        f.setStyleHint(QFont::Monospace);
+        f.setPointSize(10);
+        m_logBrowser->setFont(f);
+        m_logBrowser->document()->setDefaultFont(f);
+    }
     m_logBrowser->document()->setMaximumBlockCount(1200);
     dock->setWidget(m_logBrowser);
 
@@ -404,30 +567,47 @@ void MainWindow::addLog(const QString &type, const QString &msg, const QString &
     if (!m_logBrowser) return;
     const qint64 nowMs = m_perfTimer.isValid() ? m_perfTimer.elapsed() : 0;
     const bool important =
-        type.contains("错误") ||
-        type.contains("读取失败") ||
-        type.contains("系统") ||
-        type.contains("ROI") ||
-        type.startsWith("RX(");
+        type.contains(u8s("\xE9\x94\x99\xE8\xAF\xAF")) ||
+        type.contains(u8s("\xE8\xAF\xBB\xE5\x8F\x96\xE5\xA4\xB1\xE8\xB4\xA5")) ||
+        type.contains(u8s("\xE7\xB3\xBB\xE7\xBB\x9F")) ||
+        type.contains(QStringLiteral("ROI")) ||
+        type.startsWith(QStringLiteral("RX("));
     if (!important && (nowMs - m_lastLogMs) < 15) return;
     m_lastLogMs = nowMs;
-    QString timeStr = QTime::currentTime().toString("HH:mm:ss.zzz");
-    const QString safeType = type.toHtmlEscaped();
-    const QString safeMsg = msg.toHtmlEscaped();
-    QString html = QString("<font color='gray'>[%1]</font> <font color='%2'><b>[%3]</b></font> %4")
-                    .arg(timeStr).arg(color).arg(safeType).arg(safeMsg);
-    m_logBrowser->append(html);
+    const QTime ct = QTime::currentTime();
+    char tsBuf[32];
+    qsnprintf(tsBuf, sizeof(tsBuf), "%02d:%02d:%02d.%03d",
+        ct.hour(), ct.minute(), ct.second(), ct.msec());
+    const QString timeStr = QString::fromLatin1(tsBuf);
+
+    QTextCursor c = m_logBrowser->textCursor();
+    c.movePosition(QTextCursor::End);
+
+    QTextCharFormat fmtTime;
+    fmtTime.setForeground(QColor(QStringLiteral("gray")));
+
+    QTextCharFormat fmtType;
+    fmtType.setForeground(QColor(color));
+    fmtType.setFontWeight(QFont::Bold);
+
+    QTextCharFormat fmtMsg;
+    fmtMsg.setForeground(QColor(QStringLiteral("#D4D4D4")));
+
+    c.insertText(QStringLiteral("[%1] ").arg(timeStr), fmtTime);
+    c.insertText(QStringLiteral("[%1] ").arg(type), fmtType);
+    c.insertText(msg, fmtMsg);
+    c.insertText(QStringLiteral("\n"));
+
+    m_logBrowser->setTextCursor(c);
+    m_logBrowser->ensureCursorVisible();
 }
 
-// ====================================================================
-// 【模块二核心逻辑】：UDP 文本指令下发与监听
-// ====================================================================
 void MainWindow::sendCommand(const QString &cmd)
 {
     QByteArray data = cmd.toUtf8();
     m_cmdSocket->writeDatagram(data, QHostAddress(DEVICE_IP), CMD_PORT_SEND);
-    qDebug() << ">>> [UDP 发送] ->" << DEVICE_IP << ":" << CMD_PORT_SEND << "|" << cmd;
-    addLog("指令下发 (5001)", cmd, "#569CD6");
+    qDebug() << ">>> [UDP TX] ->" << DEVICE_IP << ":" << CMD_PORT_SEND << "|" << cmd;
+    addLog(u8s("\xE6\x8C\x87\xE4\xBB\xA4\xE4\xB8\x8B\xE5\x8F\x91\x20\x28\x35\x30\x30\x31\x29"), cmd, "#569CD6");
 }
 
 void MainWindow::onCommandReplyReceived()
@@ -440,32 +620,25 @@ void MainWindow::onCommandReplyReceived()
 
         m_replySocket->readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
 
-        // 解析返回文本
         QString replyStr = QString::fromUtf8(datagram);
-        qDebug() << "<<< [UDP 接收] <-" << sender.toString() << ":" << senderPort << "|" << replyStr;
-        addLog("设备应答 (5002)", replyStr, "#6A9955");
+        qDebug() << "<<< [UDP RX] <-" << sender.toString() << ":" << senderPort << "|" << replyStr;
+        addLog(u8s("\xE8\xAE\xBE\xE5\xA4\x87\xE5\xBA\x94\xE7\xAD\x94\x20\x28\x35\x30\x30\x32\x29"), replyStr, "#6A9955");
 
-        // 在左下角状态栏展示设备返回值（绿色勾勾强调）
         if(ui->statusbar) {
-            ui->statusbar->showMessage(QString("✅ 硬件回传: %1").arg(replyStr), 5000);
+            ui->statusbar->showMessage(u8s("\xE7\xA1\xAC\xE4\xBB\xB6\xE5\x9B\x9E\xE4\xBC\xA0\x3A\x20\x25\x31").arg(replyStr), 5000);
         }
     }
 }
 
-// ====================================================================
-// 工具栏构建与 UI 状态机
-// ====================================================================
 void MainWindow::createToolBar()
 {
-    m_mainToolBar = new QToolBar("主控工具栏", this);
+    m_mainToolBar = new QToolBar("Toolbar", this);
     addToolBar(Qt::TopToolBarArea, m_mainToolBar);
     m_mainToolBar->setMovable(false);
 
-    // 高度放宽到 40，确保文字不被裁剪
     m_mainToolBar->setFixedHeight(40);
     m_mainToolBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
 
-    // 去除Emoji，纯文本稳定渲染
     m_mainToolBar->setStyleSheet(
         "QToolBar { "
         "   background-color: #f0f0f0; "
@@ -473,7 +646,7 @@ void MainWindow::createToolBar()
         "   spacing: 10px; "
         "} "
         "QToolButton { "
-        "   font-family: 'Microsoft YaHei'; "
+        "   font-family: 'Microsoft YaHei','Microsoft YaHei UI','SimHei','SimSun','NSimSun','Arial Unicode MS',sans-serif; "
         "   font-weight: bold; "
         "   font-size: 14px; "
         "   color: #000000; "
@@ -490,15 +663,17 @@ void MainWindow::createToolBar()
         "}"
     );
 
-    m_actOpenDevice = new QAction("设备运行", this);
-    m_actCloseDevice = new QAction("设备停止", this);
-    m_actSavePng = new QAction("无损采集", this);
-    m_actSaveJpg = new QAction("压缩采集", this);
-    m_actSaveVideo = new QAction("实时网络采集", this);
-    m_actStopCapture = new QAction("停止采集", this);
-    m_actClearImage = new QAction("清除图像", this);
-    m_actSaveFullPanorama = new QAction("保存全图", this);
-    m_actExit = new QAction("退出系统", this);
+    m_actOpenDevice = new QAction(u8s("\xE8\xAE\xBE\xE5\xA4\x87\xE8\xBF\x90\xE8\xA1\x8C"), this);
+    m_actCloseDevice = new QAction(u8s("\xE8\xAE\xBE\xE5\xA4\x87\xE5\x81\x9C\xE6\xAD\xA2"), this);
+    m_actSavePng = new QAction(u8s("\xE6\x97\xA0\xE6\x8D\x9F\xE9\x87\x87\xE9\x9B\x86"), this);
+    m_actSaveJpg = new QAction(u8s("\xE5\x8E\x8B\xE7\xBC\xA9\xE9\x87\x87\xE9\x9B\x86"), this);
+    m_actSaveVideo = new QAction(u8s("\xE5\xAE\x9E\xE6\x97\xB6\xE7\xBD\x91\xE7\xBB\x9C\xE9\x87\x87\xE9\x9B\x86"), this);
+    m_actStopCapture = new QAction(u8s("\xE5\x81\x9C\xE6\xAD\xA2\xE9\x87\x87\xE9\x9B\x86"), this);
+    m_actClearImage = new QAction(u8s("\xE6\xB8\x85\xE9\x99\xA4\xE5\x9B\xBE\xE5\x83\x8F"), this);
+    m_actSaveFullPanorama = new QAction(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), this);
+    m_actRecord = new QAction(u8s("\xE5\xBC\x80\xE5\xA7\x8B\xE5\xBD\x95\xE5\x88\xB6"), this);
+    m_actRecord->setCheckable(true);
+    m_actExit = new QAction(u8s("\xE9\x80\x80\xE5\x87\xBA\xE7\xB3\xBB\xE7\xBB\x9F"), this);
 
     m_mainToolBar->addAction(m_actOpenDevice);
     m_mainToolBar->addAction(m_actCloseDevice);
@@ -509,8 +684,9 @@ void MainWindow::createToolBar()
     m_mainToolBar->addAction(m_actStopCapture);
     m_mainToolBar->addSeparator();
     m_mainToolBar->addAction(m_actClearImage);
+    m_mainToolBar->addAction(m_actRecord);
 
-    QAction *actOpenTurntable = m_mainToolBar->addAction("转台控制");
+    QAction *actOpenTurntable = m_mainToolBar->addAction(u8s("\xE8\xBD\xAC\xE5\x8F\xB0\xE6\x8E\xA7\xE5\x88\xB6"));
     m_mainToolBar->addAction(m_actSaveFullPanorama);
 
     QWidget *spacer = new QWidget(this);
@@ -526,6 +702,7 @@ void MainWindow::createToolBar()
     connect(m_actStopCapture, &QAction::triggered, this, &MainWindow::onActionStopCapture);
     connect(m_actClearImage, &QAction::triggered, this, &MainWindow::onClearUiClicked);
     connect(m_actSaveFullPanorama, &QAction::triggered, this, &MainWindow::onSaveFullPanoramaClicked);
+    connect(m_actRecord, &QAction::triggered, this, &MainWindow::onToggleRecording);
     connect(actOpenTurntable, &QAction::triggered, this, [=](){ m_ctrlDialog->show(); });
     connect(m_actExit, &QAction::triggered, this, &MainWindow::close);
 
@@ -540,21 +717,68 @@ void MainWindow::updateUiState()
     m_actSaveJpg->setEnabled(m_isDeviceOpen);
     m_actSaveVideo->setEnabled(m_isDeviceOpen);
     m_actStopCapture->setEnabled(m_isDeviceOpen);
+    if (m_actRecord) m_actRecord->setEnabled(m_isDeviceOpen);
 
-    bool ready = false;
-    {
-        QMutexLocker locker(&m_fullSaveMutex);
-        ready = (m_rgbSegments > 0 && m_bwSegments > 0
-                 && m_rgbSegFilled.size() == m_rgbSegments
-                 && m_bwSegFilled.size() == m_bwSegments
-                 && m_rgbSegFilled.count(true) == m_rgbSegments
-                 && m_bwSegFilled.count(true) == m_bwSegments);
-    }
     if (m_actSaveFullPanorama) {
-        m_actSaveFullPanorama->setEnabled(!m_isSavingFullPanorama && ready);
+        bool canSave = false;
+        QString tip = u8s("\xE5\x85\xA8\xE6\x99\xAF\xE7\xBC\x93\xE5\xAD\x98\xE6\x9C\xAA\xE5\xB0\xB1\xE7\xBB\xAA");
+        if (m_panoCache) {
+            const PanoramaCache::BlockState rgbFull = m_panoCache->state(PanoramaCache::FullRgb);
+            const PanoramaCache::BlockState bwFull = m_panoCache->state(PanoramaCache::FullBw);
+            const PanoramaCache::BlockState rgbThumb = m_panoCache->state(PanoramaCache::ThumbRgb);
+            const PanoramaCache::BlockState bwThumb = m_panoCache->state(PanoramaCache::ThumbBw);
+            if (!rgbFull.inited) {
+                tip = (rgbThumb.inited && rgbThumb.validFrames > 0)
+                    ? u8s("\xE5\xBD\xA9\xE8\x89\xB2\xE6\x97\xA0\xE6\x8D\x9F\xE5\x85\xA8\xE6\x99\xAF\xE5\x86\x85\xE5\xAD\x98\xE4\xB8\x8D\xE5\x8F\xAF\xE7\x94\xA8\xEF\xBC\x88\xE7\xBC\xA9\xE7\x95\xA5\xE5\xB7\xB2\xE6\x94\xB6\xE5\x88\xB0\xE5\xB8\xA7\xEF\xBC\x89")
+                    : u8s("\xE5\xBD\xA9\xE8\x89\xB2\xE6\x97\xA0\xE6\x8D\x9F\xE5\x85\xA8\xE6\x99\xAF\xE6\x9C\xAA\xE5\xB0\xB1\xE7\xBB\xAA\xEF\xBC\x88\xE5\xB0\x9A\xE6\x9C\xAA\xE6\x94\xB6\xE5\x88\xB0\xE5\xB8\xA7\xE6\x88\x96\xE8\xA7\xA3\xE7\xA0\x81\xE5\xA4\xB1\xE8\xB4\xA5\xEF\xBC\x89");
+            } else if (!bwFull.inited) {
+                tip = (bwThumb.inited && bwThumb.validFrames > 0)
+                    ? u8s("\xE9\xBB\x91\xE7\x99\xBD\xE6\x97\xA0\xE6\x8D\x9F\xE5\x85\xA8\xE6\x99\xAF\xE5\x86\x85\xE5\xAD\x98\xE4\xB8\x8D\xE5\x8F\xAF\xE7\x94\xA8\xEF\xBC\x88\xE7\xBC\xA9\xE7\x95\xA5\xE5\xB7\xB2\xE6\x94\xB6\xE5\x88\xB0\xE5\xB8\xA7\xEF\xBC\x89")
+                    : u8s("\xE9\xBB\x91\xE7\x99\xBD\xE6\x97\xA0\xE6\x8D\x9F\xE5\x85\xA8\xE6\x99\xAF\xE6\x9C\xAA\xE5\xB0\xB1\xE7\xBB\xAA\xEF\xBC\x88\xE5\xB0\x9A\xE6\x9C\xAA\xE6\x94\xB6\xE5\x88\xB0\xE5\xB8\xA7\xE6\x88\x96\xE8\xA7\xA3\xE7\xA0\x81\xE5\xA4\xB1\xE8\xB4\xA5\xEF\xBC\x89");
+            } else if (rgbFull.segments <= 0 || bwFull.segments <= 0) {
+                tip = u8s("\xE5\x85\xA8\xE6\x99\xAF\xE5\x88\x86\xE6\xAE\xB5\xE6\x9C\xAA\xE5\x88\x9D\xE5\xA7\x8B\xE5\x8C\x96");
+            } else if (rgbFull.validFrames <= 0 || bwFull.validFrames <= 0) {
+                tip = u8s("\xE5\x85\xA8\xE6\x99\xAF\xE5\xB0\x9A\xE6\x97\xA0\xE6\x9C\x89\xE6\x95\x88\xE5\xB8\xA7");
+            } else {
+                const bool complete = (rgbFull.validFrames == rgbFull.segments && bwFull.validFrames == bwFull.segments);
+                canSave = true;
+                tip = complete
+                    ? u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\xBD\x93\xE5\x89\x8D\xE5\x85\xA8\xE6\x99\xAF")
+                    : u8s("\xE6\x9C\xAA\xE6\xBB\xA1\xE5\x9C\x88\xEF\xBC\x9A\x52\x47\x42\x20\x25\x31\x2F\x25\x32\x20\x42\x57\x20\x25\x33\x2F\x25\x34")
+                          .arg(rgbFull.validFrames).arg(rgbFull.segments).arg(bwFull.validFrames).arg(bwFull.segments);
+            }
+        }
+        m_actSaveFullPanorama->setToolTip(tip);
+        m_actSaveFullPanorama->setEnabled(canSave);
     }
 }
 
+void MainWindow::onToggleRecording()
+{
+    if (!m_actRecord) return;
+    if (!m_recordWorker) {
+        m_actRecord->setChecked(false);
+        return;
+    }
+    if (!m_isDeviceOpen) {
+        m_actRecord->setChecked(false);
+        return;
+    }
+
+    const bool enable = m_actRecord->isChecked();
+    m_isRecording = enable;
+
+    if (m_colorThread) m_colorThread->setRecordingEnabled(enable);
+    if (m_thermalThread) m_thermalThread->setRecordingEnabled(enable);
+
+    if (enable) {
+        QMetaObject::invokeMethod(m_recordWorker, "startRecording", Qt::QueuedConnection, Q_ARG(QString, QStringLiteral("D:/DMX_data")), Q_ARG(int, 10));
+        addLog(QStringLiteral("REC"), QStringLiteral("Start"), QStringLiteral("#569CD6"));
+        return;
+    }
+    QMetaObject::invokeMethod(m_recordWorker, "stopRecording", Qt::QueuedConnection);
+    addLog(QStringLiteral("REC"), QStringLiteral("Stop"), QStringLiteral("#569CD6"));
+}
 double MainWindow::toRelativeAngle(double rawAngleDeg)
 {
     double a = rawAngleDeg;
@@ -567,285 +791,116 @@ double MainWindow::toRelativeAngle(double rawAngleDeg)
     return r;
 }
 
-// ====================================================================
-// 【模块二】：工具栏按钮调用 UDP 发送
-// ====================================================================
 void MainWindow::onActionOpenDevice()
 {
-    sendCommand("TG_OPEN_DEVICE;"); // 触发 UDP 发包
+    sendCommand("TG_OPEN_DEVICE;");
     m_isDeviceOpen = true;
     updateUiState();
-    ui->statusbar->showMessage("正在向设备下发使能命令...", 2000);
+    ui->statusbar->showMessage(u8s("\xE6\xAD\xA3\xE5\x9C\xA8\xE5\x90\x91\xE8\xAE\xBE\xE5\xA4\x87\xE4\xB8\x8B\xE5\x8F\x91\xE4\xBD\xBF\xE8\x83\xBD\xE5\x91\xBD\xE4\xBB\xA4\x2E\x2E\x2E"), 2000);
 }
 
 void MainWindow::onActionCloseDevice()
 {
-    sendCommand("TG_CLOSE_DEVICE;"); // 触发 UDP 发包
-    if (m_driver) m_driver->stop();  // 本地 UI 联动停止
+    sendCommand("TG_CLOSE_DEVICE;");
+    if (m_driver) m_driver->stop();
     m_isDeviceOpen = false;
     updateUiState();
-    ui->statusbar->showMessage("正在向设备下发停止命令...", 2000);
+    ui->statusbar->showMessage(u8s("\xE6\xAD\xA3\xE5\x9C\xA8\xE5\x90\x91\xE8\xAE\xBE\xE5\xA4\x87\xE4\xB8\x8B\xE5\x8F\x91\xE5\x81\x9C\xE6\xAD\xA2\xE5\x91\xBD\xE4\xBB\xA4\x2E\x2E\x2E"), 2000);
 }
 
 void MainWindow::onActionSavePng()
 {
     sendCommand("TG_SAVE_PNG;");
-    ui->statusbar->showMessage("指令已下发: 启动无损采集...", 2000);
+    ui->statusbar->showMessage(u8s("\xE6\x8C\x87\xE4\xBB\xA4\xE5\xB7\xB2\xE4\xB8\x8B\xE5\x8F\x91\x3A\x20\xE5\x90\xAF\xE5\x8A\xA8\xE6\x97\xA0\xE6\x8D\x9F\xE9\x87\x87\xE9\x9B\x86\x2E\x2E\x2E"), 2000);
 }
 
 void MainWindow::onActionSaveJpg()
 {
     sendCommand("TG_SAVE_JPG;");
-    ui->statusbar->showMessage("指令已下发: 启动压缩采集...", 2000);
+    ui->statusbar->showMessage(u8s("\xE6\x8C\x87\xE4\xBB\xA4\xE5\xB7\xB2\xE4\xB8\x8B\xE5\x8F\x91\x3A\x20\xE5\x90\xAF\xE5\x8A\xA8\xE5\x8E\x8B\xE7\xBC\xA9\xE9\x87\x87\xE9\x9B\x86\x2E\x2E\x2E"), 2000);
 }
 
 void MainWindow::onActionSaveVideo()
 {
     sendCommand("TG_SAVE_VIDEO;");
-    ui->statusbar->showMessage("指令已下发: 启动实时网络视频采集...", 2000);
+    ui->statusbar->showMessage(u8s("\xE6\x8C\x87\xE4\xBB\xA4\xE5\xB7\xB2\xE4\xB8\x8B\xE5\x8F\x91\x3A\x20\xE5\x90\xAF\xE5\x8A\xA8\xE5\xAE\x9E\xE6\x97\xB6\xE7\xBD\x91\xE7\xBB\x9C\xE8\xA7\x86\xE9\xA2\x91\xE9\x87\x87\xE9\x9B\x86\x2E\x2E\x2E"), 2000);
 }
 
 void MainWindow::onActionStopCapture()
 {
     sendCommand("TG_STOP_CAPTURE;");
-    ui->statusbar->showMessage("指令已下发: 停止图像采集！", 2000);
-}
-
-static bool writeBmp24FromImage(const QString &outPath, int fullW, int fullH, const QImage &srcImg, QString *errMsg)
-{
-    if (srcImg.isNull()) {
-        if (errMsg) *errMsg = "没有可保存的RGB数据";
-        return false;
-    }
-    QImage img = srcImg;
-    if (img.width() != fullW || img.height() != fullH) {
-        img = img.scaled(fullW, fullH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-    }
-    img = img.convertToFormat(QImage::Format_RGB888);
-
-    const int bytesPerPixel = 3;
-    const int rowStride = fullW * bytesPerPixel;
-    const int pixelOffset = 54;
-    const qint64 imageSize = (qint64)rowStride * fullH;
-    const qint64 fileSize = pixelOffset + imageSize;
-
-    QFile f(outPath);
-    if (!f.open(QIODevice::ReadWrite)) {
-        if (errMsg) *errMsg = "无法创建文件: " + outPath;
-        return false;
-    }
-
-    QDataStream ds(&f);
-    ds.setByteOrder(QDataStream::LittleEndian);
-    ds << quint16(0x4D42);
-    ds << quint32((quint32)fileSize);
-    ds << quint16(0) << quint16(0);
-    ds << quint32(pixelOffset);
-    ds << quint32(40);
-    ds << qint32(fullW);
-    ds << qint32(fullH);
-    ds << quint16(1);
-    ds << quint16(24);
-    ds << quint32(0);
-    ds << quint32((quint32)imageSize);
-    ds << qint32(2835) << qint32(2835);
-    ds << quint32(0) << quint32(0);
-
-    if (!f.resize(fileSize)) {
-        if (errMsg) *errMsg = "预分配失败";
-        f.close();
-        f.remove();
-        return false;
-    }
-
-    for (int y = 0; y < fullH; ++y) {
-        const qint64 pos = pixelOffset + (qint64)(fullH - 1 - y) * rowStride;
-        if (!f.seek(pos)) {
-            if (errMsg) *errMsg = "写入定位失败";
-            f.close();
-            f.remove();
-            return false;
-        }
-        const uchar *line = img.constScanLine(y);
-        const qint64 need = (qint64)rowStride;
-        const qint64 wrote = f.write((const char*)line, need);
-        if (wrote != need) {
-            if (errMsg) *errMsg = "写入失败";
-            f.close();
-            f.remove();
-            return false;
-        }
-    }
-
-    f.close();
-    return true;
-}
-
-static bool writeBmp8GrayFromImage(const QString &outPath, int fullW, int fullH, const QImage &srcImg, QString *errMsg)
-{
-    if (srcImg.isNull()) {
-        if (errMsg) *errMsg = "没有可保存的BW数据";
-        return false;
-    }
-    QImage img = srcImg;
-    if (img.width() != fullW || img.height() != fullH) {
-        img = img.scaled(fullW, fullH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-    }
-    img = img.convertToFormat(QImage::Format_Indexed8);
-
-    const int rowStride = fullW;
-    const int pixelOffset = 14 + 40 + 256 * 4;
-    const qint64 imageSize = (qint64)rowStride * fullH;
-    const qint64 fileSize = pixelOffset + imageSize;
-
-    QFile f(outPath);
-    if (!f.open(QIODevice::ReadWrite)) {
-        if (errMsg) *errMsg = "无法创建文件: " + outPath;
-        return false;
-    }
-
-    QDataStream ds(&f);
-    ds.setByteOrder(QDataStream::LittleEndian);
-    ds << quint16(0x4D42);
-    ds << quint32((quint32)fileSize);
-    ds << quint16(0) << quint16(0);
-    ds << quint32(pixelOffset);
-    ds << quint32(40);
-    ds << qint32(fullW);
-    ds << qint32(fullH);
-    ds << quint16(1);
-    ds << quint16(8);
-    ds << quint32(0);
-    ds << quint32((quint32)imageSize);
-    ds << qint32(2835) << qint32(2835);
-    ds << quint32(256) << quint32(0);
-    for (int i = 0; i < 256; ++i) {
-        ds << quint8(i) << quint8(i) << quint8(i) << quint8(0);
-    }
-
-    if (!f.resize(fileSize)) {
-        if (errMsg) *errMsg = "预分配失败";
-        f.close();
-        f.remove();
-        return false;
-    }
-
-    for (int y = 0; y < fullH; ++y) {
-        const qint64 pos = pixelOffset + (qint64)(fullH - 1 - y) * rowStride;
-        if (!f.seek(pos)) {
-            if (errMsg) *errMsg = "写入定位失败";
-            f.close();
-            f.remove();
-            return false;
-        }
-        const uchar *line = img.constScanLine(y);
-        const qint64 need = (qint64)rowStride;
-        const qint64 wrote = f.write((const char*)line, need);
-        if (wrote != need) {
-            if (errMsg) *errMsg = "写入失败";
-            f.close();
-            f.remove();
-            return false;
-        }
-    }
-
-    f.close();
-    return true;
+    ui->statusbar->showMessage(u8s("\xE6\x8C\x87\xE4\xBB\xA4\xE5\xB7\xB2\xE4\xB8\x8B\xE5\x8F\x91\x3A\x20\xE5\x81\x9C\xE6\xAD\xA2\xE5\x9B\xBE\xE5\x83\x8F\xE9\x87\x87\xE9\x9B\x86\xEF\xBC\x81"), 2000);
 }
 
 void MainWindow::onSaveFullPanoramaClicked()
 {
-    {
-        QMutexLocker locker(&m_fullSaveMutex);
-        if (m_isSavingFullPanorama) return;
-        const bool ready = (m_rgbSegments > 0 && m_bwSegments > 0
-                            && m_rgbSegFilled.size() == m_rgbSegments
-                            && m_bwSegFilled.size() == m_bwSegments
-                            && m_rgbSegFilled.count(true) == m_rgbSegments
-                            && m_bwSegFilled.count(true) == m_bwSegments);
-        if (!ready) {
-            if (ui->statusbar) ui->statusbar->showMessage("全景图尚未拼接完成，无法保存全图", 3000);
-            addLog("保存全图", "拦截：全景图未拼接完成", "#F44336");
-            return;
-        }
-        m_isSavingFullPanorama = true;
-        m_pendingSaveSnapshots = 2;
-    }
-    updateUiState();
-
-    const QString rgbDir = "E:/.trae/program/DMX_qt/untitled1/data/RGB";
-    const QString bwDir = "E:/.trae/program/DMX_qt/untitled1/data/BW";
-    QDir().mkpath(rgbDir);
-    QDir().mkpath(bwDir);
-
-    const QString ts = QDateTime::currentDateTime().toString("yyyy_MM_dd_HH_mm_ss");
-    const QString rgbOut = QDir(rgbDir).filePath(ts + "_rgb.bmp");
-    const QString bwOut = QDir(bwDir).filePath(ts + "_bw.bmp");
-    m_pendingSaveRgbPath = rgbOut;
-    m_pendingSaveBwPath = bwOut;
-    m_pendingSaveRgb = QImage();
-    m_pendingSaveBw = QImage();
-
-    {
-        const int fullW = 65536;
-        const int fullH = 4096;
-        const qint64 rgbNeed = 54 + (qint64)fullW * fullH * 3;
-        const qint64 bwNeed = (14 + 40 + 256 * 4) + (qint64)fullW * fullH;
-        const qint64 need = rgbNeed + bwNeed + 64ll * 1024 * 1024;
-        QStorageInfo st(QFileInfo(rgbOut).absolutePath());
-        if (st.isValid() && st.isReady() && st.bytesAvailable() > 0 && st.bytesAvailable() < need) {
-            {
-                QMutexLocker locker(&m_fullSaveMutex);
-                m_isSavingFullPanorama = false;
-            }
-            updateUiState();
-            const QString msg = QString("磁盘剩余空间不足（need=%1MB free=%2MB）")
-                .arg(need / (1024 * 1024))
-                .arg(st.bytesAvailable() / (1024 * 1024));
-            addLog("保存全图", "失败: " + msg, "#F44336");
-            if (ui->statusbar) ui->statusbar->showMessage("保存全图失败: " + msg, 5000);
-            return;
-        }
-    }
-
-    addLog("保存全图", QString("开始保存快照：%1").arg(ts), "#569CD6");
-    if (ui->statusbar) ui->statusbar->showMessage("正在保存全景图快照...", 3000);
-
-    if (m_colorThread) m_colorThread->requestPanoramaSnapshot();
-    if (m_thermalThread) m_thermalThread->requestPanoramaSnapshot();
-}
-
-void MainWindow::onSaveFullPanoramaFinished(bool ok, const QString &msg, const QString &rgbPath, const QString &bwPath)
-{
-    {
-        QMutexLocker locker(&m_fullSaveMutex);
-        m_isSavingFullPanorama = false;
-    }
-    m_pendingSaveSnapshots = 0;
-    m_pendingSaveRgb = QImage();
-    m_pendingSaveBw = QImage();
-    m_pendingSaveRgbPath.clear();
-    m_pendingSaveBwPath.clear();
-    updateUiState();
-    if (ok) {
-        addLog("保存全图", "完成: " + rgbPath, "#6A9955");
-        addLog("保存全图", "完成: " + bwPath, "#6A9955");
-        if (ui->statusbar) ui->statusbar->showMessage("保存全图成功", 4000);
+    if (!m_panoCache) {
+        if (ui->statusbar) ui->statusbar->showMessage(u8s("\xE5\x85\xA8\xE6\x99\xAF\xE7\xBC\x93\xE5\xAD\x98\xE6\x9C\xAA\xE5\xB0\xB1\xE7\xBB\xAA\xEF\xBC\x8C\xE6\x97\xA0\xE6\xB3\x95\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), 3000);
+        addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), u8s("\xE6\x8B\xA6\xE6\x88\xAA\xEF\xBC\x9A\xE5\x85\xA8\xE6\x99\xAF\xE7\xBC\x93\xE5\xAD\x98\xE6\x9C\xAA\xE5\xB0\xB1\xE7\xBB\xAA"), "#F44336");
         return;
     }
-    addLog("保存全图", "失败: " + msg, "#F44336");
-    if (ui->statusbar) ui->statusbar->showMessage("保存全图失败: " + msg, 5000);
+
+    const PanoramaCache::BlockState rgb = m_panoCache->state(PanoramaCache::FullRgb);
+    const PanoramaCache::BlockState bw = m_panoCache->state(PanoramaCache::FullBw);
+    if (!rgb.inited || !bw.inited || rgb.segments <= 0 || bw.segments <= 0 || rgb.validFrames <= 0 || bw.validFrames <= 0) {
+        if (ui->statusbar) ui->statusbar->showMessage(u8s("\xE5\x85\xA8\xE6\x99\xAF\xE7\xBC\x93\xE5\xAD\x98\xE6\x9C\xAA\xE5\xB0\xB1\xE7\xBB\xAA\xEF\xBC\x88\x52\x47\x42\x2F\x42\x57\xE6\x97\xA0\xE6\x8D\x9F\xE5\x85\xA8\xE6\x99\xAF\xE4\xB8\x8D\xE5\x8F\xAF\xE7\x94\xA8\xEF\xBC\x89\xEF\xBC\x8C\xE6\x97\xA0\xE6\xB3\x95\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), 4000);
+        addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), u8s("\xE6\x8B\xA6\xE6\x88\xAA\xEF\xBC\x9A\xE7\xBC\x93\xE5\xAD\x98\xE6\x9C\xAA\xE5\xB0\xB1\xE7\xBB\xAA\x20\x72\x67\x62\x2E\x69\x6E\x69\x74\x65\x64\x3D\x25\x31\x20\x62\x77\x2E\x69\x6E\x69\x74\x65\x64\x3D\x25\x32\x20\x72\x67\x62\x2E\x76\x61\x6C\x69\x64\x3D\x25\x33\x2F\x25\x34\x20\x62\x77\x2E\x76\x61\x6C\x69\x64\x3D\x25\x35\x2F\x25\x36")
+               .arg(rgb.inited).arg(bw.inited)
+               .arg(rgb.validFrames).arg(rgb.segments)
+               .arg(bw.validFrames).arg(bw.segments), "#F44336");
+        return;
+    }
+
+    const bool complete = (rgb.validFrames == rgb.segments && bw.validFrames == bw.segments);
+    if (!complete) {
+        if (ui->statusbar) ui->statusbar->showMessage(u8s("\xE5\x85\xA8\xE6\x99\xAF\xE6\x9C\xAA\xE6\xBB\xA1\xE5\x9C\x88\xEF\xBC\x9A\xE4\xBF\x9D\xE5\xAD\x98\xE4\xBC\x9A\xE5\x8C\x85\xE5\x90\xAB\xE7\xA9\xBA\xE7\x99\xBD\xE5\x8C\xBA\xE5\x9F\x9F"), 3000);
+        addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), QString("Incomplete: RGB=%1/%2 BW=%3/%4").arg(rgb.validFrames).arg(rgb.segments).arg(bw.validFrames).arg(bw.segments), "#FFA500");
+    }
+
+    const QString baseDir = "E:/.trae/program/DMX_qt/untitled1/data/SAVES";
+    if (!QDir().mkpath(baseDir)) {
+        addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), u8s("\xE5\x88\x9B\xE5\xBB\xBA\xE7\x9B\xAE\xE5\xBD\x95\xE5\xA4\xB1\xE8\xB4\xA5\x3A\x20") + baseDir, "#F44336");
+        return;
+    }
+    const QString ts = makeAsciiTimestamp(QDateTime::currentDateTime(), QStringLiteral("SAVE2_"));
+    const QString outDir = QDir(baseDir).filePath(ts);
+    if (!QDir().mkpath(outDir)) {
+        addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), u8s("\xE5\x88\x9B\xE5\xBB\xBA\xE7\x9B\xAE\xE5\xBD\x95\xE5\xA4\xB1\xE8\xB4\xA5\x3A\x20") + outDir, "#F44336");
+        return;
+    }
+    const int rgbQuality = 95;
+    addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), u8s("\xE5\xB7\xB2\xE5\x85\xA5\xE9\x98\x9F\x3A\x20") + outDir, "#569CD6");
+    if (ui->statusbar) ui->statusbar->showMessage(u8s("\xE5\xB7\xB2\xE5\x85\xA5\xE9\x98\x9F\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE6\x99\xAF\x2E\x2E\x2E"), 2000);
+    emit savePanoramaRequested(outDir, rgbQuality);
 }
 
-// ====================================================================
-// UI 交互与渲染层 (保持不变)
-// ====================================================================
+void MainWindow::onSaveFullPanoramaFinished(quint64 saveId, bool ok, const QString &msg, const QString &outDir)
+{
+    if (ok) {
+        addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), QString("%1 OK: %2").arg(saveId).arg(outDir), "#6A9955");
+        if (ui->statusbar) ui->statusbar->showMessage(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE\xE6\x88\x90\xE5\x8A\x9F"), 2500);
+        return;
+    }
+    addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), QString("%1 FAIL: %2 (%3)").arg(saveId).arg(msg).arg(outDir), "#F44336");
+    if (ui->statusbar) ui->statusbar->showMessage(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE\xE5\xA4\xB1\xE8\xB4\xA5\x3A\x20") + msg, 4000);
+}
+
 void MainWindow::onClearUiClicked()
 {
-    fullPanoramaImage.fill(Qt::black);
-    fullThermalPanoramaImage.fill(Qt::black);
-    panoramaView->updateImage(fullPanoramaImage);
-    thermalPanoramaView->updateImage(fullThermalPanoramaImage);
+    {
+        QImage rgb(8192, 240, QImage::Format_RGB32);
+        rgb.fill(Qt::black);
+        QImage bw(8192, 240, QImage::Format_Indexed8);
+        QVector<QRgb> table;
+        table.reserve(256);
+        for (int i = 0; i < 256; ++i) table.push_back(qRgb(i, i, i));
+        bw.setColorTable(table);
+        bw.fill(0);
+        m_uiThumbRgb = rgb;
+        m_uiThumbBw = bw;
+        panoramaView->updateImage(m_uiThumbRgb);
+        thermalPanoramaView->updateImage(m_uiThumbBw);
+    }
 
     QImage blackImg(1024, 2048, QImage::Format_RGB32);
     blackImg.fill(Qt::black);
@@ -858,27 +913,15 @@ void MainWindow::onClearUiClicked()
     m_zeroAngleRaw = 0.0;
     m_lastColorRoi = QImage();
     m_lastThermalRoi = QImage();
-    m_pendingRadarFeedback = false;
-    m_pendingSaveSnapshots = 0;
-    m_pendingSaveRgb = QImage();
-    m_pendingSaveBw = QImage();
-    m_pendingSaveRgbPath.clear();
-    m_pendingSaveBwPath.clear();
-    if(m_logBrowser) m_logBrowser->clear(); // 清空日志
+    if(m_logBrowser) m_logBrowser->clear();
 
     for(auto& target : m_simTargets) { target.isDetected = false; }
     radarView->setTargets(m_simTargets);
 
-    {
-        QMutexLocker locker(&m_fullSaveMutex);
-        m_rgbSegFilled.clear();
-        m_bwSegFilled.clear();
-        m_rgbSegments = 0;
-        m_bwSegments = 0;
-    }
+    if (m_panoCache) m_panoCache->resetAll();
     updateUiState();
 
-    if(ui->statusbar) ui->statusbar->showMessage("界面缓存已清空！", 2000);
+    if(ui->statusbar) ui->statusbar->showMessage(u8s("\xE7\x95\x8C\xE9\x9D\xA2\xE7\xBC\x93\xE5\xAD\x98\xE5\xB7\xB2\xE6\xB8\x85\xE7\xA9\xBA\xEF\xBC\x81"), 2000);
 }
 
 void MainWindow::onPanoramaClicked(double angle)
@@ -886,253 +929,99 @@ void MainWindow::onPanoramaClicked(double angle)
     panoramaView->setSelectedAngle(angle);
     thermalPanoramaView->setSelectedAngle(angle);
 
-    if (m_colorThread) m_colorThread->requestRoi(angle, 0);
-    if (m_thermalThread) m_thermalThread->requestRoi(angle, 1);
+    if (!m_panoCache) return;
+    m_lastRoiAngle = angle;
+    if (m_roiWorker) {
+        QMetaObject::invokeMethod(m_roiWorker, "requestPreview", Qt::QueuedConnection, Q_ARG(double, angle));
+    }
 }
 
-void MainWindow::updatePanoramaSliceByAngle(const QImage &frame, double angleDeg, int type)
+void MainWindow::onThumbRoiReady(double angle, const QImage &rgb, const QImage &bwRgb32)
 {
-    if (frame.isNull()) return;
-    QImage *panoramaCanvas = (type == 0) ? &fullPanoramaImage : &fullThermalPanoramaImage;
-
-    const int sliceW = frame.width();
-    if (sliceW <= 0) return;
-    int segments = panoramaCanvas->width() / sliceW;
-    if (segments <= 0) segments = 1;
-    double a = angleDeg;
-    while (a < 0.0) a += 360.0;
-    while (a >= 360.0) a -= 360.0;
-    int tileIndex = (int)(a / 360.0 * segments);
-    if (tileIndex < 0) tileIndex = 0;
-    if (tileIndex >= segments) tileIndex = segments - 1;
-    if (type == 1) {
-        tileIndex = (tileIndex + (segments / 2)) % segments;
+    if (m_lastRoiAngle >= 0.0 && qAbs(m_lastRoiAngle - angle) > 0.001) return;
+    if (!rgb.isNull()) {
+        m_lastColorRoi = rgb;
+        if (colorRoiView) colorRoiView->updateImage(rgb);
     }
-    const int ui_StartX = tileIndex * sliceW;
-
-    QPainter p(panoramaCanvas);
-    p.setRenderHint(QPainter::Antialiasing, false);
-    p.drawImage(ui_StartX, 0, frame.height() == 240 ? frame : frame.scaled(sliceW, 240, Qt::IgnoreAspectRatio, Qt::FastTransformation));
-    p.end();
+    if (!bwRgb32.isNull()) {
+        m_lastThermalRoi = bwRgb32;
+        if (thermalRoiView) thermalRoiView->updateImage(bwRgb32);
+    }
 }
 
-void MainWindow::onColorFrameReceived(QImage img, double angleDeg)
+void MainWindow::onRenderTick()
 {
-    if (!m_zeroAngleInited) {
-        m_zeroAngleInited = true;
-        m_zeroAngleRaw = m_latestAngle;
+    if (m_renderPending.testAndSetAcquire(0, 1)) {
+        QMetaObject::invokeMethod(this, "drainRender", Qt::QueuedConnection);
     }
-    if (!img.isNull() && img.width() > 0) {
-        const int sliceW = img.width();
-        const int segments = qMax(1, fullPanoramaImage.width() / sliceW);
-        double a = angleDeg;
-        while (a < 0.0) a += 360.0;
-        while (a >= 360.0) a -= 360.0;
-        int tileIndex = (int)(a / 360.0 * segments);
-        if (tileIndex < 0) tileIndex = 0;
-        if (tileIndex >= segments) tileIndex = segments - 1;
+}
 
-        bool shouldUpdateUi = false;
-        {
-            QMutexLocker locker(&m_fullSaveMutex);
-            const bool wasAllReady = (m_rgbSegments > 0 && m_bwSegments > 0
-                                      && m_rgbSegFilled.size() == m_rgbSegments
-                                      && m_bwSegFilled.size() == m_bwSegments
-                                      && m_rgbSegFilled.count(true) == m_rgbSegments
-                                      && m_bwSegFilled.count(true) == m_bwSegments);
-            if (m_rgbSegments != segments) {
-                m_rgbSegments = segments;
-                m_rgbSegFilled = QBitArray(segments, false);
-            }
-            if (tileIndex >= 0 && tileIndex < m_rgbSegments) {
-                m_rgbSegFilled.setBit(tileIndex, true);
-            }
-            const bool isAllReady = (m_rgbSegments > 0 && m_bwSegments > 0
-                                     && m_rgbSegFilled.size() == m_rgbSegments
-                                     && m_bwSegFilled.size() == m_bwSegments
-                                     && m_rgbSegFilled.count(true) == m_rgbSegments
-                                     && m_bwSegFilled.count(true) == m_bwSegments);
-            shouldUpdateUi = (!wasAllReady && isAllReady);
+void MainWindow::drainRender()
+{
+    m_renderPending.storeRelease(0);
+    if (!m_panoCache) return;
+
+    QRect dirtyRgb;
+    QRect dirtyBw;
+    const PanoramaCache::ThumbInfo infoRgb = m_panoCache->thumbInfoRgb();
+    const PanoramaCache::ThumbInfo infoBw = m_panoCache->thumbInfoBw();
+    if (infoRgb.inited && !m_uiThumbRgb.isNull() && m_uiThumbRgb.format() == infoRgb.format &&
+        m_uiThumbRgb.width() == infoRgb.panoW && m_uiThumbRgb.height() == infoRgb.panoH) {
+        const QVector<int> tiles = m_panoCache->takeDirtyThumbRgbTiles();
+        for (int t : tiles) {
+            if (!m_panoCache->blitThumbRgbTileTo(t, m_uiThumbRgb)) continue;
+            const int x = t * infoRgb.sliceW;
+            dirtyRgb |= QRect(x, 0, infoRgb.sliceW, infoRgb.panoH);
         }
-        if (shouldUpdateUi) updateUiState();
     }
+    if (infoBw.inited && !m_uiThumbBw.isNull() && m_uiThumbBw.format() == infoBw.format &&
+        m_uiThumbBw.width() == infoBw.panoW && m_uiThumbBw.height() == infoBw.panoH) {
+        const QVector<int> tiles = m_panoCache->takeDirtyThumbBwTiles();
+        for (int t : tiles) {
+            if (!m_panoCache->blitThumbBwTileTo(t, m_uiThumbBw)) continue;
+            const int x = t * infoBw.sliceW;
+            dirtyBw |= QRect(x, 0, infoBw.sliceW, infoBw.panoH);
+        }
+    }
+    if (!dirtyRgb.isNull() && panoramaView) panoramaView->updateImagePartial(m_uiThumbRgb, dirtyRgb);
+    if (!dirtyBw.isNull() && thermalPanoramaView) thermalPanoramaView->updateImagePartial(m_uiThumbBw, dirtyBw);
 
     const qint64 nowMs = m_perfTimer.isValid() ? m_perfTimer.elapsed() : 0;
-    if ((nowMs - m_lastColorUiMs) < 33) return;
-    m_lastColorUiMs = nowMs;
-    updatePanoramaSliceByAngle(img, angleDeg, 0);
-
     if ((nowMs - m_lastDetectMs) >= 120) {
         m_lastDetectMs = nowMs;
-        checkTargetDetection(angleDeg);
+        checkTargetDetection(m_latestAngle);
     }
-
-    if (m_prevCheckAngle > 300.0 && angleDeg < 60.0) {
+    if (m_prevCheckAngle > 300.0 && m_latestAngle < 60.0) {
         bool needReset = false;
-        for(auto& target : m_simTargets) {
-            if(target.isDetected) { target.isDetected = false; needReset = true; }
+        for (auto &target : m_simTargets) {
+            if (target.isDetected) { target.isDetected = false; needReset = true; }
         }
-        if(needReset) radarView->setTargets(m_simTargets);
+        if (needReset) radarView->setTargets(m_simTargets);
     }
-    m_prevCheckAngle = angleDeg;
+    m_prevCheckAngle = m_latestAngle;
+    updateUiState();
 }
 
-void MainWindow::onThermalFrameReceived(QImage img, double angleDeg)
-{
-    if (!m_zeroAngleInited) {
-        m_zeroAngleInited = true;
-        m_zeroAngleRaw = m_latestAngle;
-    }
-    if (!img.isNull() && img.width() > 0) {
-        const int sliceW = img.width();
-        const int segments = qMax(1, fullThermalPanoramaImage.width() / sliceW);
-        double a = angleDeg;
-        while (a < 0.0) a += 360.0;
-        while (a >= 360.0) a -= 360.0;
-        int tileIndex = (int)(a / 360.0 * segments);
-        if (tileIndex < 0) tileIndex = 0;
-        if (tileIndex >= segments) tileIndex = segments - 1;
-        tileIndex = (tileIndex + (segments / 2)) % segments;
-
-        bool shouldUpdateUi = false;
-        {
-            QMutexLocker locker(&m_fullSaveMutex);
-            const bool wasAllReady = (m_rgbSegments > 0 && m_bwSegments > 0
-                                      && m_rgbSegFilled.size() == m_rgbSegments
-                                      && m_bwSegFilled.size() == m_bwSegments
-                                      && m_rgbSegFilled.count(true) == m_rgbSegments
-                                      && m_bwSegFilled.count(true) == m_bwSegments);
-            if (m_bwSegments != segments) {
-                m_bwSegments = segments;
-                m_bwSegFilled = QBitArray(segments, false);
-            }
-            if (tileIndex >= 0 && tileIndex < m_bwSegments) {
-                m_bwSegFilled.setBit(tileIndex, true);
-            }
-            const bool isAllReady = (m_rgbSegments > 0 && m_bwSegments > 0
-                                     && m_rgbSegFilled.size() == m_rgbSegments
-                                     && m_bwSegFilled.size() == m_bwSegments
-                                     && m_rgbSegFilled.count(true) == m_rgbSegments
-                                     && m_bwSegFilled.count(true) == m_bwSegments);
-            shouldUpdateUi = (!wasAllReady && isAllReady);
-        }
-        if (shouldUpdateUi) updateUiState();
-    }
-
-    const qint64 nowMs = m_perfTimer.isValid() ? m_perfTimer.elapsed() : 0;
-    if ((nowMs - m_lastThermalUiMs) < 33) return;
-    m_lastThermalUiMs = nowMs;
-    updatePanoramaSliceByAngle(img, angleDeg, 1);
-}
-
-void MainWindow::onPathReceived(const QString &type, const QString &path, const QString &sender)
+void MainWindow::onPathReceived(const QString &type, const QString &path, const QString &sender, qint64 rxMs)
 {
     const QString t = type.trimmed().toUpper();
+    const double angleDeg = m_latestAngle;
     if (t == "RGB") {
-        if (m_colorThread) m_colorThread->enqueuePath(t, path, sender);
+        if (m_colorThread) m_colorThread->enqueuePath(t, path, sender, angleDeg, rxMs);
         return;
     }
     if (t == "BW" || t == "GRAY") {
-        if (m_thermalThread) m_thermalThread->enqueuePath(t, path, sender);
+        if (m_thermalThread) m_thermalThread->enqueuePath(t, path, sender, angleDeg, rxMs);
         return;
     }
-}
-
-void MainWindow::onColorRoiCaptured(QImage img, int tag)
-{
-    if (img.isNull()) return;
-    if (tag == 0) {
-        m_lastColorRoi = img;
-        colorRoiView->updateImage(img);
-        return;
-    }
-    if (tag == 2) {
-        radarFeedbackView->updateImage(img);
-        return;
-    }
-    if (tag == 3) {
-        QImage targetImg = img;
-        QPainter p(&targetImg);
-        p.setPen(QPen(Qt::red, 8));
-        p.drawRect(targetImg.rect().adjusted(8, 8, -8, -8));
-        p.setPen(Qt::green);
-        p.setFont(QFont("Arial", 40, QFont::Bold));
-        p.drawText(40, 80, QString("DETECTED: %1 deg").arg(m_pendingCaptureAngle));
-        p.end();
-        captureView->updateImage(targetImg);
-        return;
-    }
-}
-
-void MainWindow::onThermalRoiCaptured(QImage img, int tag)
-{
-    if (img.isNull()) return;
-    if (tag == 1) {
-        m_lastThermalRoi = img;
-        thermalRoiView->updateImage(img);
-        return;
-    }
-}
-
-void MainWindow::onRgbPanoramaSnapshotReady(QImage img)
-{
-    if (img.isNull()) return;
-    if (m_pendingSaveSnapshots < 0) return;
-    bool stored = false;
-    if (m_pendingSaveRgb.isNull()) {
-        m_pendingSaveRgb = img;
-        stored = true;
-    }
-    if (stored && m_pendingSaveSnapshots > 0) --m_pendingSaveSnapshots;
-    if (m_pendingSaveSnapshots != 0) return;
-    if (m_pendingSaveRgb.isNull() || m_pendingSaveBw.isNull()) return;
-    m_pendingSaveSnapshots = -1;
-
-    const QString rgbOut = m_pendingSaveRgbPath;
-    const QString bwOut = m_pendingSaveBwPath;
-    const QImage rgb = m_pendingSaveRgb;
-    const QImage bw = m_pendingSaveBw;
-
-    QObject *worker = new QObject();
-    QThread *t = new QThread(this);
-    worker->moveToThread(t);
-    connect(t, &QThread::started, worker, [=]() {
-        const int fullW = 65536;
-        const int fullH = 4096;
-        QString err;
-        bool ok = true;
-        if (ok && !writeBmp24FromImage(rgbOut, fullW, fullH, rgb, &err)) ok = false;
-        if (ok && !writeBmp8GrayFromImage(bwOut, fullW, fullH, bw, &err)) ok = false;
-        QMetaObject::invokeMethod(this, "onSaveFullPanoramaFinished", Qt::QueuedConnection,
-                                  Q_ARG(bool, ok),
-                                  Q_ARG(QString, ok ? QString("保存成功") : err),
-                                  Q_ARG(QString, rgbOut),
-                                  Q_ARG(QString, bwOut));
-        t->quit();
-    });
-    connect(t, &QThread::finished, worker, &QObject::deleteLater);
-    connect(t, &QThread::finished, t, &QObject::deleteLater);
-    t->start();
-}
-
-void MainWindow::onBwPanoramaSnapshotReady(QImage img)
-{
-    if (img.isNull()) return;
-    if (m_pendingSaveSnapshots < 0) return;
-    bool stored = false;
-    if (m_pendingSaveBw.isNull()) {
-        m_pendingSaveBw = img;
-        stored = true;
-    }
-    if (stored && m_pendingSaveSnapshots > 0) --m_pendingSaveSnapshots;
-    if (m_pendingSaveSnapshots != 0) return;
-    if (m_pendingSaveRgb.isNull() || m_pendingSaveBw.isNull()) return;
-    onRgbPanoramaSnapshotReady(m_pendingSaveRgb);
 }
 
 void MainWindow::onRadarClicked(int angle)
 {
-    if (m_colorThread) m_colorThread->requestRoi(angle, 2);
+    if (!m_panoCache) return;
+    QImage roi = m_panoCache->extractFullRgbSliceByAngle(angle);
+    if (roi.isNull()) return;
+    radarFeedbackView->updateImage(roi);
 }
 
 void MainWindow::checkTargetDetection(double currentAngle)
@@ -1149,7 +1038,20 @@ void MainWindow::checkTargetDetection(double currentAngle)
                 target.isDetected = true;
                 targetsChanged = true;
                 m_pendingCaptureAngle = target.angle;
-                if (m_colorThread) m_colorThread->requestRoi(target.angle, 3);
+                if (m_panoCache) {
+                    QImage roi = m_panoCache->extractFullRgbSliceByAngle(target.angle);
+                    if (!roi.isNull()) {
+                        QImage targetImg = roi;
+                        QPainter p(&targetImg);
+                        p.setPen(QPen(Qt::red, 8));
+                        p.drawRect(targetImg.rect().adjusted(8, 8, -8, -8));
+                        p.setPen(Qt::green);
+                        p.setFont(QFont("Arial", 40, QFont::Bold));
+                        p.drawText(40, 80, QString("DETECTED: %1 deg").arg(m_pendingCaptureAngle));
+                        p.end();
+                        captureView->updateImage(targetImg);
+                    }
+                }
             }
         }
     }

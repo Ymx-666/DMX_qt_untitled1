@@ -1,4 +1,4 @@
-#include "aivideowidget.h"
+﻿#include "aivideowidget.h"
 #include <QPainter>
 #include <QMouseEvent>
 

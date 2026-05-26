@@ -1,4 +1,6 @@
 #include "videothread.h"
+#include "panoramacache.h"
+#include "rawrecorder.h"
 #include "udpprotocol.h"
 #include <QDebug>
 #include <QVector>
@@ -9,11 +11,15 @@
 #include <QTime>
 #include <QDateTime>
 #include <QMetaObject>
+#include <QFile>
 #include <QFileInfo>
+#include <QDir>
 #include <QImageReader>
+#include <QBuffer>
 #include <QThread>
 #include <QtGlobal>
-#include <opencv2/opencv.hpp>
+
+static inline QString u8s(const char *s) { return QString::fromUtf8(s); }
 
 static double normalize360(double a)
 {
@@ -30,6 +36,45 @@ static const QVector<QRgb>& grayColorTable()
         for (int c = 0; c < 256; ++c) t.push_back(qRgb(c, c, c));
     }
     return t;
+}
+
+static QImage rotateCCW90(const QImage &src)
+{
+    if (src.isNull()) return QImage();
+    const int w = src.width();
+    const int h = src.height();
+    if (w <= 0 || h <= 0) return QImage();
+
+    if (src.format() == QImage::Format_RGB32) {
+        QImage dst(h, w, QImage::Format_RGB32);
+        if (dst.isNull()) return QImage();
+        for (int y = 0; y < h; ++y) {
+            const QRgb *srcLine = reinterpret_cast<const QRgb*>(src.constScanLine(y));
+            for (int x = 0; x < w; ++x) {
+                const int dy = (w - 1 - x);
+                QRgb *dstLine = reinterpret_cast<QRgb*>(dst.scanLine(dy));
+                dstLine[y] = srcLine[x];
+            }
+        }
+        return dst;
+    }
+
+    if (src.format() == QImage::Format_Indexed8) {
+        QImage dst(h, w, QImage::Format_Indexed8);
+        if (dst.isNull()) return QImage();
+        dst.setColorTable(src.colorTable().isEmpty() ? grayColorTable() : src.colorTable());
+        for (int y = 0; y < h; ++y) {
+            const uchar *srcLine = src.constScanLine(y);
+            for (int x = 0; x < w; ++x) {
+                const int dy = (w - 1 - x);
+                uchar *dstLine = dst.scanLine(dy);
+                dstLine[y] = srcLine[x];
+            }
+        }
+        return dst;
+    }
+
+    return rotateCCW90(src.convertToFormat(QImage::Format_RGB32));
 }
 
 static QString extractSenderIp(const QString &sender)
@@ -74,6 +119,21 @@ static bool parsePathPayload(const QString &msg, QString *typeStr, QString *path
 
     *typeStr = t;
     *pathStr = p;
+    return true;
+}
+
+static bool replaceTrailingIndex(const QString &path, quint64 newIdx, QString *outPath)
+{
+    if (!outPath) return false;
+    const QFileInfo fi(path);
+    const QString base = fi.completeBaseName();
+    int i = base.size() - 1;
+    while (i >= 0 && base[i].isDigit()) --i;
+    if (i == base.size() - 1) return false;
+    const QString head = base.left(i + 1);
+    const QString ext = fi.completeSuffix();
+    const QString file = ext.isEmpty() ? (head + QString::number(newIdx)) : (head + QString::number(newIdx) + "." + ext);
+    *outPath = QDir(fi.path()).filePath(file);
     return true;
 }
 
@@ -126,34 +186,16 @@ static bool readImageWithRetry(const QString &path, bool preferGray, int maxWait
             QImageReader reader(path);
             QImage img = reader.read();
             if (!img.isNull()) {
+                if (preferGray) {
+                    if (img.format() != QImage::Format_Indexed8) img = img.convertToFormat(QImage::Format_Indexed8, grayColorTable());
+                    if (img.colorTable().isEmpty()) img.setColorTable(grayColorTable());
+                } else {
+                    if (img.format() != QImage::Format_RGB32) img = img.convertToFormat(QImage::Format_RGB32);
+                }
                 *outImg = img;
                 return true;
             }
             lastErr = reader.errorString();
-        }
-
-        {
-            const int flag = preferGray ? cv::IMREAD_GRAYSCALE : cv::IMREAD_COLOR;
-            cv::Mat mat = cv::imread(path.toStdString(), flag);
-            if (!mat.empty()) {
-                if (preferGray) {
-                    if (mat.type() != CV_8UC1) {
-                        cv::cvtColor(mat, mat, cv::COLOR_BGR2GRAY);
-                    }
-                    QImage img((const uchar*)mat.data, mat.cols, mat.rows, mat.step, QImage::Format_Indexed8);
-                    img.setColorTable(grayColorTable());
-                    *outImg = img.copy();
-                    return !outImg->isNull();
-                } else {
-                    if (mat.type() != CV_8UC3) {
-                        cv::cvtColor(mat, mat, cv::COLOR_BGRA2BGR);
-                    }
-                    cv::cvtColor(mat, mat, cv::COLOR_BGR2BGRA);
-                    QImage img((const uchar*)mat.data, mat.cols, mat.rows, mat.step, QImage::Format_RGB32);
-                    *outImg = img.copy();
-                    return !outImg->isNull();
-                }
-            }
         }
 
         QThread::msleep(30);
@@ -228,8 +270,8 @@ static void unlockTwoRead(QReadWriteLock *a, QReadWriteLock *b)
     if (b) b->unlock();
 }
 
-VideoWorker::VideoWorker(int type)
-    : QObject(nullptr), m_type(type)
+VideoWorker::VideoWorker(int type, QSharedPointer<PanoramaCache> cache)
+    : QObject(nullptr), m_type(type), m_cache(std::move(cache))
 {
 }
 
@@ -252,6 +294,9 @@ void VideoWorker::start()
     m_totalDatagramsRead = 0;
     m_lastDatagramLen = 0;
     m_lastSender.clear();
+    m_lastReadFailEmitMs = 0;
+    m_readFailBurst = 0;
+    m_lastReadFailDetail.clear();
     m_lastStatRxPackets = 0;
     m_lastStatDecodedFrames = 0;
     m_lastStatDroppedPackets = 0;
@@ -261,21 +306,32 @@ void VideoWorker::start()
     m_pendingType.clear();
     m_pendingPath.clear();
     m_pendingDirty = false;
-    m_textFrameIndex = 0;
-    m_pathRgbFrameIndex = 0;
-    m_pathBwFrameIndex = 0;
-    m_rawMaxIndexSeen = 0;
-    m_rawRxCounter = 0;
-    m_panorama = QImage();
-    m_fullSliceW = 0;
-    m_fullSliceH = 0;
-    for (QReadWriteLock *l : m_segLocks) delete l;
-    m_segLocks.clear();
-    if (m_lockBuckets <= 0) m_lockBuckets = 64;
-    m_segLocks.reserve(m_lockBuckets);
-    for (int i = 0; i < m_lockBuckets; ++i) m_segLocks.push_back(new QReadWriteLock());
+    m_jobsScheduled.storeRelease(0);
+    {
+        QMutexLocker lk(&m_jobsMtx);
+        m_jobs.clear();
+        m_hasCurrentJob = false;
+    }
+    if (m_jobsTimer) {
+        m_jobsTimer->stop();
+        m_jobsTimer->deleteLater();
+        m_jobsTimer = nullptr;
+    }
+    m_seqRgb = SeqState();
+    m_seqBw = SeqState();
+    if (m_cache && (m_type == 0 || m_type == 1)) {
+        if (m_type == 0) m_cache->resetRgb();
+        if (m_type == 1) m_cache->resetBw();
+    }
 
-    emit logRequested("系统", QString("监听线程启动 PID=%1").arg(QCoreApplication::applicationPid()), "#00AAAA");
+    emit logRequested(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), QString("Worker start PID=%1").arg(QCoreApplication::applicationPid()), "#00AAAA");
+    {
+        const QList<QByteArray> fmts = QImageReader::supportedImageFormats();
+        QStringList list;
+        list.reserve(fmts.size());
+        for (const QByteArray &f : fmts) list.push_back(QString::fromLatin1(f));
+        emit logRequested(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), QStringLiteral("ImageFormats=%1").arg(list.join(",")), "#00AAAA");
+    }
 
     m_statTimer = new QTimer(this);
     const int statIntervalMs = 3000;
@@ -288,39 +344,76 @@ void VideoWorker::start()
         m_pathSocket->setSocketOption(QAbstractSocket::ReceiveBufferSizeSocketOption, 4 * 1024 * 1024);
         if (m_pathSocket->bind(QHostAddress::AnyIPv4, 8001, QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
             emit logRequested(
-                "系统",
-                QString("成功绑定 8001 (IPv4) local=%1:%2 rcvbuf=%3")
+                u8s("\xE7\xB3\xBB\xE7\xBB\x9F"),
+                QString("Bind 8001 ok local=%1:%2 rcvbuf=%3")
                     .arg(m_pathSocket->localAddress().toString())
                     .arg(m_pathSocket->localPort())
                     .arg(m_pathSocket->socketOption(QAbstractSocket::ReceiveBufferSizeSocketOption).toLongLong()),
                 "#00AAAA"
             );
         } else {
-            emit logRequested("系统", QString("错误：无法绑定 8001 err=%1").arg(m_pathSocket->errorString()), "#F44336");
+            emit logRequested(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), QString("Bind 8001 failed err=%1").arg(m_pathSocket->errorString()), "#F44336");
         }
         connect(m_pathSocket, SIGNAL(readyRead()), this, SLOT(processPathDatagrams()), Qt::DirectConnection);
     }
 
-    if (m_type == 0 || m_type == 1) {
-        const int panoW = 65536;
-        const int panoH = 4096;
-        if (m_type == 0) {
-            m_panorama = QImage(panoW, panoH, QImage::Format_RGB32);
-            if (!m_panorama.isNull()) {
-                m_panorama.fill(Qt::black);
-            } else {
-                emit logRequested("错误", QString("RGB 全景缓冲区申请失败: %1x%2").arg(panoW).arg(panoH), "#F44336");
-            }
-        } else {
-            m_panorama = QImage(panoW, panoH, QImage::Format_Indexed8);
-            if (!m_panorama.isNull()) {
-                m_panorama.setColorTable(grayColorTable());
-                m_panorama.fill(0);
-            } else {
-                emit logRequested("错误", QString("BW 全景缓冲区申请失败: %1x%2").arg(panoW).arg(panoH), "#F44336");
-            }
+}
+
+void VideoWorker::schedulePathJobs(int delayMs)
+{
+    if (!m_running) return;
+    if (m_jobsScheduled.testAndSetAcquire(0, 1)) {
+        if (delayMs <= 0) {
+            QMetaObject::invokeMethod(this, "processOnePathJob", Qt::QueuedConnection);
+            return;
+        }
+        if (!m_jobsTimer) {
+            m_jobsTimer = new QTimer(this);
+            m_jobsTimer->setSingleShot(true);
+            connect(m_jobsTimer, &QTimer::timeout, this, &VideoWorker::processOnePathJob);
+        }
+        m_jobsTimer->start(delayMs);
+    }
+}
+
+void VideoWorker::processOnePathJob()
+{
+    m_jobsScheduled.storeRelease(0);
+    if (!m_running) return;
+
+    PathJob job;
+    bool hasJob = false;
+    {
+        QMutexLocker lk(&m_jobsMtx);
+        if (m_hasCurrentJob) {
+            job = m_currentJob;
+            m_hasCurrentJob = false;
+            hasJob = true;
+        } else if (!m_jobs.isEmpty()) {
+            job = m_jobs.dequeue();
+            hasJob = true;
         }
     }
+    if (!hasJob) return;
+
+    int retryMs = 0;
+    const bool done = handlePathInternal(job, &retryMs);
+    if (!done && retryMs > 0) {
+        {
+            QMutexLocker lk(&m_jobsMtx);
+            m_currentJob = job;
+            m_hasCurrentJob = true;
+        }
+        schedulePathJobs(retryMs);
+        return;
+    }
+
+    bool more = false;
+    {
+        QMutexLocker lk(&m_jobsMtx);
+        more = !m_jobs.isEmpty();
+    }
+    if (more) schedulePathJobs(0);
 }
 
 void VideoWorker::stop()
@@ -332,82 +425,36 @@ void VideoWorker::stop()
         m_statTimer->deleteLater();
         m_statTimer = nullptr;
     }
-    if (m_dataSocket) {
-        m_dataSocket->close();
-        m_dataSocket->deleteLater();
-        m_dataSocket = nullptr;
-    }
     if (m_pathSocket) {
         m_pathSocket->close();
         m_pathSocket->deleteLater();
         m_pathSocket = nullptr;
     }
-    for (QReadWriteLock *l : m_segLocks) delete l;
-    m_segLocks.clear();
 }
 
-void VideoWorker::requestRoi(double angleDeg, int tag)
+void VideoWorker::setCurrentAngle(double angleDeg)
 {
-    if (m_type != 0 && m_type != 1) return;
-    if (m_panorama.isNull() || m_fullSliceW <= 0 || m_fullSliceH <= 0) return;
-
-    const int sliceW = m_fullSliceW;
-    const int panoW = m_panorama.width();
-    const int panoH = m_panorama.height();
-    const int segments = qMax(1, panoW / sliceW);
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
     const double a = normalize360(angleDeg);
-    int tileIndex = (int)(a / 360.0 * segments);
-    if (tileIndex < 0) tileIndex = 0;
-    if (tileIndex >= segments) tileIndex = segments - 1;
-    const int startX = tileIndex * sliceW;
-    QReadWriteLock *lockA = nullptr;
-    QReadWriteLock *lockB = nullptr;
-    if (!m_segLocks.isEmpty()) {
-        lockA = m_segLocks[bucketIndex(tileIndex, m_segLocks.size())];
-    }
-
-    QImage roi(sliceW, panoH, m_panorama.format());
-    if (roi.isNull()) return;
-    if (roi.format() == QImage::Format_Indexed8) {
-        roi.setColorTable(grayColorTable());
-    }
-
-    const int rightW = qMin(sliceW, panoW - startX);
-    const int leftW = sliceW - rightW;
-    const int bpp = (m_panorama.format() == QImage::Format_Indexed8) ? 1 : 4;
-    if (leftW > 0 && !m_segLocks.isEmpty()) {
-        lockB = m_segLocks[bucketIndex(0, m_segLocks.size())];
-    }
-    lockTwoRead(lockA, lockB);
-    for (int y = 0; y < panoH; ++y) {
-        const uchar *srcLine = m_panorama.constScanLine(y);
-        uchar *dstLine = roi.scanLine(y);
-        memcpy(dstLine, srcLine + startX * bpp, rightW * bpp);
-        if (leftW > 0) {
-            memcpy(dstLine + rightW * bpp, srcLine, leftW * bpp);
-        }
-    }
-    unlockTwoRead(lockA, lockB);
-    emit roiCaptured(roi.copy(), tag);
-}
-
-void VideoWorker::requestPanoramaSnapshot()
-{
-    if (m_type != 0 && m_type != 1) return;
-    if (m_panorama.isNull()) return;
-    if (m_segLocks.isEmpty()) {
-        emit panoramaSnapshotReady(m_panorama.copy());
+    if (!m_hasAngle) {
+        m_hasAngle = true;
+        m_currentAngleDeg = a;
+        m_prevAngleDeg = a;
+        m_lastAngleChangeMs = nowMs;
         return;
     }
-    for (QReadWriteLock *l : m_segLocks) if (l) l->lockForRead();
-    QImage snap = m_panorama.copy();
-    for (int i = m_segLocks.size() - 1; i >= 0; --i) if (m_segLocks[i]) m_segLocks[i]->unlock();
-    emit panoramaSnapshotReady(snap);
+    const double diff = qAbs(normalize360(a - m_prevAngleDeg));
+    const double d = (diff > 180.0) ? (360.0 - diff) : diff;
+    m_currentAngleDeg = a;
+    if (d > 0.1) {
+        m_prevAngleDeg = a;
+        m_lastAngleChangeMs = nowMs;
+    }
 }
 
 void VideoWorker::onStatTick()
 {
-    const int port = m_dataSocket ? (int)m_dataSocket->localPort() : 8001;
+    const int port = m_pathSocket ? (int)m_pathSocket->localPort() : 8001;
     const quint64 rx = m_totalRxPackets - m_lastStatRxPackets;
     const quint64 ok = m_totalDecodedFrames - m_lastStatDecodedFrames;
     const quint64 drop = m_totalDroppedPackets - m_lastStatDroppedPackets;
@@ -435,16 +482,106 @@ void VideoWorker::onStatTick()
             "#6A9955"
         );
     }
+
+    int pathJobCount = 0;
+    {
+        QMutexLocker lk(&m_jobsMtx);
+        pathJobCount = m_jobs.size() + (m_hasCurrentJob ? 1 : 0);
+    }
+    QString recStr;
+    if (m_type == 0) {
+        if (RawRecorder *rec = qobject_cast<RawRecorder*>(m_recorder.data())) {
+            int recCount = 0;
+            qint64 recBytes = 0;
+            rec->queueStats(&recCount, &recBytes);
+            recStr = QString(" rec=%1 recBytes=%2KB").arg(recCount).arg(recBytes / 1024);
+        }
+    }
+    emit logRequested(
+        QStringLiteral("QUEUE"),
+        QString("path=%1%2").arg(pathJobCount).arg(recStr),
+        QStringLiteral("#00AAAA"));
+
+    auto flushSeq = [&](const char *name, SeqState &st) {
+        if (st.dupCount == 0 && st.reorderCount == 0 && st.gapCount == 0) return;
+        emit logRequested(
+            QStringLiteral("SEQ"),
+            QString("%1 dup=%2 reorder=%3 gap=%4 maxGap=%5 maxReorder=%6")
+                .arg(QString::fromLatin1(name))
+                .arg(st.dupCount).arg(st.reorderCount).arg(st.gapCount)
+                .arg(st.maxGap).arg(st.maxReorder),
+            QStringLiteral("#FF9800"));
+        st.dupCount = 0;
+        st.reorderCount = 0;
+        st.gapCount = 0;
+        st.maxGap = 0;
+        st.maxReorder = 0;
+    };
+    flushSeq("RGB", m_seqRgb);
+    flushSeq("BW", m_seqBw);
 }
 
-VideoThread::VideoThread(int type, QObject *parent)
-    : QThread(parent), m_type(type), m_running(false), m_worker(nullptr)
+void VideoWorker::noteReadFail(const QString &subType, const QString &detail, const QString &senderIp, qint64 nowMs)
+{
+    ++m_readFailBurst;
+    m_lastReadFailDetail = detail;
+    if (m_lastReadFailEmitMs == 0 || (nowMs - m_lastReadFailEmitMs) >= 600) {
+        const quint64 n = m_readFailBurst;
+        m_readFailBurst = 0;
+        m_lastReadFailEmitMs = nowMs;
+        const QString msg = (n <= 1)
+            ? QString("%1 %2").arg(subType, detail)
+            : QString("%1 x%2 last: %3").arg(subType).arg(n).arg(detail);
+        emit logRequested(u8s("\xE8\xAF\xBB\xE5\x8F\x96\xE5\xA4\xB1\xE8\xB4\xA5"), msg + (senderIp.isEmpty() ? QString() : QStringLiteral(" (from=%1)").arg(senderIp)), "#F44336");
+    }
+}
+
+void VideoWorker::updateSeqState(const QString &subType, quint64 fileIdx, const QString &winPath, qint64 nowMs)
+{
+    Q_UNUSED(winPath);
+    Q_UNUSED(nowMs);
+    SeqState *st = nullptr;
+    if (subType == "RGB") st = &m_seqRgb;
+    if (subType == "BW") st = &m_seqBw;
+    if (!st) return;
+    if (fileIdx == 0) return;
+
+    if (st->expected == 0) {
+        st->expected = fileIdx + 1;
+        return;
+    }
+    if (fileIdx == st->expected) {
+        st->expected = fileIdx + 1;
+        return;
+    }
+    if (fileIdx + 1 == st->expected) {
+        ++st->dupCount;
+        return;
+    }
+    if (fileIdx > st->expected) {
+        const quint64 g = fileIdx - st->expected;
+        ++st->gapCount;
+        if (g > st->maxGap) st->maxGap = g;
+        st->expected = fileIdx + 1;
+        return;
+    }
+    const quint64 r = (st->expected - 1) - fileIdx;
+    ++st->reorderCount;
+    if (r > st->maxReorder) st->maxReorder = r;
+}
+
+VideoThread::VideoThread(int type, QSharedPointer<PanoramaCache> cache, QObject *parent)
+    : QThread(parent),
+      m_type(type),
+      m_running(false),
+      m_worker(nullptr),
+      m_cache(std::move(cache))
 {
     QString role;
-    if (m_type == 1) role = "8001(BW) 文件共享线程";
-    else if (m_type == 0) role = "8001(RGB) 文件共享线程";
-    else role = "8001 路径信令线程";
-    qDebug() << "UDP 监听线程已就绪，类型:" << role;
+    if (m_type == 1) role = "8001(BW) path worker";
+    else if (m_type == 0) role = "8001(RGB) path worker";
+    else role = "8001 path dispatcher";
+    qDebug() << "UDP worker ready:" << role;
 }
 
 VideoThread::~VideoThread()
@@ -462,29 +599,18 @@ void VideoThread::stop()
     quit();
 }
 
-void VideoThread::requestRoi(double angleDeg, int tag)
+void VideoThread::setCurrentAngle(double angleDeg)
 {
     if (!m_worker) return;
     QMetaObject::invokeMethod(
         m_worker,
-        "requestRoi",
+        "setCurrentAngle",
         Qt::QueuedConnection,
-        Q_ARG(double, angleDeg),
-        Q_ARG(int, tag)
+        Q_ARG(double, angleDeg)
     );
 }
 
-void VideoThread::requestPanoramaSnapshot()
-{
-    if (!m_worker) return;
-    QMetaObject::invokeMethod(
-        m_worker,
-        "requestPanoramaSnapshot",
-        Qt::QueuedConnection
-    );
-}
-
-void VideoThread::enqueuePath(QString typeStr, QString pathStr, QString sender)
+void VideoThread::enqueuePath(QString typeStr, QString pathStr, QString sender, double angleDeg, qint64 rxMs)
 {
     if (!m_worker) return;
     QMetaObject::invokeMethod(
@@ -493,20 +619,35 @@ void VideoThread::enqueuePath(QString typeStr, QString pathStr, QString sender)
         Qt::QueuedConnection,
         Q_ARG(QString, typeStr),
         Q_ARG(QString, pathStr),
-        Q_ARG(QString, sender)
+        Q_ARG(QString, sender),
+        Q_ARG(double, angleDeg),
+        Q_ARG(qint64, rxMs)
     );
+}
+
+void VideoThread::setRecorder(QObject *recorder)
+{
+    m_recorder = recorder;
+    if (!m_worker) return;
+    QMetaObject::invokeMethod(m_worker, "setRecorder", Qt::QueuedConnection, Q_ARG(QObject*, recorder));
+}
+
+void VideoThread::setRecordingEnabled(bool enabled)
+{
+    m_recordingEnabled = enabled;
+    if (!m_worker) return;
+    QMetaObject::invokeMethod(m_worker, "setRecordingEnabled", Qt::QueuedConnection, Q_ARG(bool, enabled));
 }
 
 void VideoThread::run()
 {
     m_running = true;
-    m_worker = new VideoWorker(m_type);
+    m_worker = new VideoWorker(m_type, m_cache);
     m_worker->moveToThread(this);
-    connect(m_worker, &VideoWorker::frameCaptured, this, &VideoThread::frameCaptured, Qt::QueuedConnection);
-    connect(m_worker, &VideoWorker::thermalFrameCaptured, this, &VideoThread::thermalFrameCaptured, Qt::QueuedConnection);
+    m_worker->setRecorder(m_recorder.data());
+    m_worker->setRecordingEnabled(m_recordingEnabled);
     connect(m_worker, &VideoWorker::pathReceived, this, &VideoThread::pathReceived, Qt::QueuedConnection);
-    connect(m_worker, &VideoWorker::roiCaptured, this, &VideoThread::roiCaptured, Qt::QueuedConnection);
-    connect(m_worker, &VideoWorker::panoramaSnapshotReady, this, &VideoThread::panoramaSnapshotReady, Qt::QueuedConnection);
+    connect(m_worker, &VideoWorker::cacheUpdated, this, &VideoThread::cacheUpdated, Qt::QueuedConnection);
     connect(m_worker, &VideoWorker::logRequested, this, &VideoThread::onWorkerLogRequested, Qt::QueuedConnection);
     QMetaObject::invokeMethod(m_worker, "start", Qt::DirectConnection);
     exec();
@@ -517,233 +658,6 @@ void VideoThread::run()
     }
 }
 
-// 裸流二进制组包引擎 (处理 8002/8003)
-void VideoWorker::processPendingDatagrams()
-{
-    if (!m_dataSocket) return;
-    ++m_totalReadyReadCalls;
-
-    const int headerSize = (int)sizeof(ImagePacketHeader);
-
-    auto tryHandleTextPath = [&](const QByteArray &datagram, const QString &sender) -> bool {
-        const QString msg = QString::fromUtf8(datagram).trimmed();
-        if (msg.isEmpty()) return true;
-
-        QString typeStr;
-        QString pathStr;
-        if (!parsePathPayload(msg, &typeStr, &pathStr)) return true;
-
-        if (m_type == 1) {
-            if (typeStr != "BW" && typeStr != "GRAY") return true;
-        } else {
-            if (typeStr != "RGB") return true;
-        }
-
-        enqueuePath(typeStr, pathStr, sender);
-
-        return true;
-    };
-
-    auto handleBinary = [&](const QByteArray &datagram) -> void {
-        if (datagram.size() < headerSize) return;
-
-        const ImagePacketHeader *header = reinterpret_cast<const ImagePacketHeader*>(datagram.constData());
-        if (header->headerCode != 0xFFFF) return;
-
-        const uint32_t imgIdx = header->imageIndex;
-        const int payloadSize = datagram.size() - headerSize;
-        const char *payloadData = datagram.constData() + headerSize;
-
-        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-        ++m_rawRxCounter;
-        if (m_rawMaxIndexSeen != 0 && imgIdx + 1000U < m_rawMaxIndexSeen) {
-            m_bufferPool.clear();
-            m_rawMaxIndexSeen = imgIdx;
-        } else if (imgIdx > m_rawMaxIndexSeen) {
-            m_rawMaxIndexSeen = imgIdx;
-        }
-
-        ImageBuffer &buf = m_bufferPool[imgIdx];
-        if (buf.totalSize == 0) {
-            buf.totalSize = header->totalSize;
-            buf.data.reserve(header->totalSize);
-            buf.createdMs = nowMs;
-            buf.lastUpdateMs = nowMs;
-            buf.lastProgressBytes = 0;
-        }
-
-        buf.data.append(payloadData, payloadSize);
-        buf.receivedBytes += static_cast<uint32_t>(payloadSize);
-        buf.lastUpdateMs = nowMs;
-
-        if (m_rawRxCounter % 64 == 0 || m_bufferPool.size() > 128) {
-            const uint32_t window = 30;
-            const uint32_t cutoff = (m_rawMaxIndexSeen > window) ? (m_rawMaxIndexSeen - window) : 0;
-            auto it = m_bufferPool.begin();
-            while (it != m_bufferPool.end() && it.key() < cutoff) {
-                it = m_bufferPool.erase(it);
-            }
-            const qint64 stallMs = 1500;
-            const qint64 hardMs = 5000;
-            it = m_bufferPool.begin();
-            while (it != m_bufferPool.end()) {
-                ImageBuffer &b = it.value();
-                const bool noProgress = (b.receivedBytes == b.lastProgressBytes);
-                if (noProgress) {
-                    if ((b.lastUpdateMs > 0 && nowMs - b.lastUpdateMs > stallMs) ||
-                        (b.createdMs > 0 && nowMs - b.createdMs > hardMs)) {
-                        it = m_bufferPool.erase(it);
-                        continue;
-                    }
-                } else {
-                    b.lastProgressBytes = b.receivedBytes;
-                }
-                ++it;
-            }
-        }
-
-        if (buf.receivedBytes < buf.totalSize) return;
-
-        std::vector<uchar> bytes(buf.data.begin(), buf.data.end());
-        m_bufferPool.remove(imgIdx);
-
-        cv::Mat frame = cv::imdecode(bytes, m_type == 1 ? cv::IMREAD_GRAYSCALE : cv::IMREAD_COLOR);
-        if (frame.empty()) return;
-
-        if (m_type == 1) {
-            QImage bw((const uchar*)frame.data, frame.cols, frame.rows, frame.step, QImage::Format_Indexed8);
-            bw.setColorTable(grayColorTable());
-            QImage bwFull = bw.copy();
-
-            if (m_fullSliceW <= 0 || m_fullSliceH <= 0) {
-                m_fullSliceW = bwFull.width();
-                m_fullSliceH = bwFull.height();
-            }
-            const int segments = (m_fullSliceW > 0) ? qMax(1, m_panorama.width() / m_fullSliceW) : 1;
-            if (!m_panorama.isNull() && m_fullSliceW > 0) {
-                const int panoW = m_panorama.width();
-                const int panoH = m_panorama.height();
-                const int sliceW = m_fullSliceW;
-
-                const int tileIndex = (int)(imgIdx % (uint32_t)segments);
-                const int shiftedIndex = (tileIndex + (segments / 2)) % segments;
-                const int startX = shiftedIndex * sliceW;
-
-                QImage src = bwFull;
-                if (src.width() != sliceW || src.height() != panoH) {
-                    src = src.scaled(sliceW, panoH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-                    src = src.convertToFormat(QImage::Format_Indexed8);
-                    src.setColorTable(grayColorTable());
-                }
-
-                const int rightW = qMin(sliceW, panoW - startX);
-                const int leftW = sliceW - rightW;
-                QReadWriteLock *lockA = nullptr;
-                QReadWriteLock *lockB = nullptr;
-                if (!m_segLocks.isEmpty()) {
-                    lockA = m_segLocks[bucketIndex(shiftedIndex, m_segLocks.size())];
-                    if (leftW > 0) lockB = m_segLocks[bucketIndex(0, m_segLocks.size())];
-                }
-                lockTwoWrite(lockA, lockB);
-                for (int y = 0; y < panoH; ++y) {
-                    const uchar *srcLine = src.constScanLine(y);
-                    uchar *dstLine = m_panorama.scanLine(y);
-                    memcpy(dstLine + startX, srcLine, rightW);
-                    if (leftW > 0) {
-                        memcpy(dstLine, srcLine + rightW, leftW);
-                    }
-                }
-                unlockTwoWrite(lockA, lockB);
-            }
-
-            const int uiPanoW = 8192;
-            int previewW = qMax(1, uiPanoW / segments);
-            QImage preview = bwFull.scaled(previewW, 240, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-            preview = preview.convertToFormat(QImage::Format_Indexed8);
-            preview.setColorTable(grayColorTable());
-            const double angleDeg = (double)(imgIdx % (uint32_t)segments) * 360.0 / (double)segments;
-            emit thermalFrameCaptured(preview.copy(), angleDeg);
-            ++m_totalDecodedFrames;
-            return;
-        }
-
-        cv::cvtColor(frame, frame, cv::COLOR_BGR2BGRA);
-        QImage img((const uchar*)frame.data, frame.cols, frame.rows, frame.step, QImage::Format_RGB32);
-        QImage rgbFull = img.copy();
-        if (m_fullSliceW <= 0 || m_fullSliceH <= 0) {
-            m_fullSliceW = rgbFull.width();
-            m_fullSliceH = rgbFull.height();
-        }
-        const int segments = (m_fullSliceW > 0) ? qMax(1, m_panorama.width() / m_fullSliceW) : 1;
-        if (!m_panorama.isNull() && m_fullSliceW > 0) {
-            const int panoW = m_panorama.width();
-            const int panoH = m_panorama.height();
-            const int sliceW = m_fullSliceW;
-            const int tileIndex = (int)(imgIdx % (uint32_t)segments);
-            const int startX = tileIndex * sliceW;
-
-            QImage src = rgbFull;
-            if (src.width() != sliceW || src.height() != panoH) {
-                src = src.scaled(sliceW, panoH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-                src = src.convertToFormat(QImage::Format_RGB32);
-            }
-
-            const int rightW = qMin(sliceW, panoW - startX);
-            const int leftW = sliceW - rightW;
-            QReadWriteLock *lockA = nullptr;
-            QReadWriteLock *lockB = nullptr;
-            if (!m_segLocks.isEmpty()) {
-                lockA = m_segLocks[bucketIndex(tileIndex, m_segLocks.size())];
-                if (leftW > 0) lockB = m_segLocks[bucketIndex(0, m_segLocks.size())];
-            }
-            lockTwoWrite(lockA, lockB);
-            for (int y = 0; y < panoH; ++y) {
-                const uchar *srcLine = src.constScanLine(y);
-                uchar *dstLine = m_panorama.scanLine(y);
-                memcpy(dstLine + startX * 4, srcLine, rightW * 4);
-                if (leftW > 0) {
-                    memcpy(dstLine, srcLine + rightW * 4, leftW * 4);
-                }
-            }
-            unlockTwoWrite(lockA, lockB);
-        }
-
-        const int uiPanoW = 8192;
-        int previewW = qMax(1, uiPanoW / segments);
-        QImage preview = rgbFull.scaled(previewW, 240, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-        const double angleDeg = (double)(imgIdx % (uint32_t)segments) * 360.0 / (double)segments;
-        emit frameCaptured(preview.copy(), angleDeg);
-        ++m_totalDecodedFrames;
-    };
-
-    while (m_dataSocket->hasPendingDatagrams()) {
-        QByteArray datagram;
-        datagram.resize(m_dataSocket->pendingDatagramSize());
-        QHostAddress sender;
-        quint16 senderPort = 0;
-        const qint64 read = m_dataSocket->readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
-        if (read <= 0) continue;
-        if (read != datagram.size()) datagram.resize((int)read);
-        ++m_totalDatagramsRead;
-        m_lastDatagramLen = datagram.size();
-        m_lastSender = QString("%1:%2").arg(sender.toString()).arg(senderPort);
-        ++m_totalRxPackets;
-
-        bool isBinary = false;
-        if (datagram.size() >= headerSize) {
-            const ImagePacketHeader *header = reinterpret_cast<const ImagePacketHeader*>(datagram.constData());
-            isBinary = (header->headerCode == 0xFFFF);
-        }
-
-        if (isBinary) {
-            handleBinary(datagram);
-        } else {
-            tryHandleTextPath(datagram, QString("%1:%2").arg(sender.toString()).arg(senderPort));
-        }
-    }
-}
-
-// 8001 路径总机：根据 RGB 和 BW 分发数据
 void VideoWorker::processPathDatagrams()
 {
     if (!m_pathSocket) return;
@@ -761,182 +675,240 @@ void VideoWorker::processPathDatagrams()
         m_lastSender = QString("%1:%2").arg(sender.toString()).arg(senderPort);
         ++m_totalRxPackets;
 
+        const qint64 rxMs = QDateTime::currentMSecsSinceEpoch();
         const QString msg = QString::fromUtf8(datagram).trimmed();
         QString typeStr;
         QString originalPath;
         if (!parsePathPayload(msg, &typeStr, &originalPath)) continue;
 
-        enqueuePath(typeStr, originalPath, QString("%1:%2").arg(sender.toString()).arg(senderPort));
+        const QString senderStr = QString("%1:%2").arg(sender.toString()).arg(senderPort);
+        if (m_type == 2) {
+            emit pathReceived(typeStr.trimmed().toUpper(), originalPath.trimmed(), senderStr, rxMs);
+            continue;
+        }
+        enqueuePath(typeStr, originalPath, senderStr, 0.0, rxMs);
     }
 }
 
-void VideoWorker::enqueuePath(QString typeStr, QString pathStr, QString sender)
+void VideoWorker::enqueuePath(QString typeStr, QString pathStr, QString sender, double angleDeg, qint64 rxMs)
 {
     if (!m_running) return;
-    ++m_totalRxPackets;
-    m_lastSender = sender;
+    PathJob j;
+    j.type = std::move(typeStr);
+    j.path = std::move(pathStr);
+    j.sender = std::move(sender);
+    j.angleDeg = angleDeg;
+    j.rxMs = rxMs;
+    {
+        QMutexLocker lk(&m_jobsMtx);
+        m_jobs.enqueue(std::move(j));
+    }
+    schedulePathJobs(0);
+}
 
-    const QString t = typeStr.trimmed().toUpper();
-    const QString p = pathStr.trimmed();
-    if (t.isEmpty() || p.isEmpty()) return;
+void VideoWorker::setRecorder(QObject *recorder)
+{
+    m_recorder = recorder;
+}
+
+void VideoWorker::setRecordingEnabled(bool enabled)
+{
+    m_recordingEnabled = enabled;
+}
+
+bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
+{
+    if (retryMs) *retryMs = 0;
+    if (!m_running) return true;
+    ++m_totalRxPackets;
+    m_lastSender = job.sender;
+
+    const QString t = job.type.trimmed().toUpper();
+    const QString p = job.path.trimmed();
+    if (t.isEmpty() || p.isEmpty()) return true;
 
     m_lastRxType = t;
     m_lastRxPath = p;
 
+    const qint64 nowMs = (job.rxMs > 0) ? job.rxMs : QDateTime::currentMSecsSinceEpoch();
+    if (job.firstSeenMs <= 0) job.firstSeenMs = nowMs;
+
     if (m_type == 2) {
-        emit pathReceived(t, p, sender);
-        return;
+        emit pathReceived(t, p, job.sender, nowMs);
+        return true;
     }
 
     if (m_type == 1) {
-        if (t != "BW" && t != "GRAY") return;
+        if (t != "BW" && t != "GRAY") return true;
     } else if (m_type == 0) {
-        if (t != "RGB") return;
+        if (t != "RGB") return true;
     }
 
-    const QString senderIp = extractSenderIp(sender);
-    const QString winPath = mapDevicePathToWindowsShare(p, senderIp);
+    const QString senderIp = extractSenderIp(job.sender);
+    const QString winPath0 = mapDevicePathToWindowsShare(p, senderIp);
 
-    qint64 stableSize = 0;
-    if (!waitForReadableFile(winPath, 2000, &stableSize)) {
+    auto parseTrailingIndex = [&](const QString &path, quint64 *out)->bool {
+        const QString base = QFileInfo(path).completeBaseName();
+        int i = base.size() - 1;
+        while (i >= 0 && base[i].isDigit()) --i;
+        const QString digits = base.mid(i + 1);
+        if (digits.isEmpty()) return false;
+        bool ok = false;
+        const quint64 v = digits.toULongLong(&ok);
+        if (!ok) return false;
+        if (out) *out = v;
+        return true;
+    };
+    quint64 fileIdx = 0;
+    const bool hasIdx = parseTrailingIndex(winPath0, &fileIdx);
+    if (hasIdx) {
+        const QString subType = (t == "GRAY") ? "BW" : t;
+        updateSeqState(subType, fileIdx, winPath0, nowMs);
+    }
+    const quint64 cacheFileIdx = hasIdx ? fileIdx : 0;
+
+    QString decErr;
+    const bool preferGray = (m_type == 1);
+    QString usedPath = winPath0;
+    const QFileInfo fi(usedPath);
+    const bool exists = fi.exists() && fi.isFile();
+    const qint64 sz = exists ? fi.size() : 0;
+    const bool stable = (exists && sz > 0 && job.lastSize == sz);
+    job.lastSize = sz;
+    const qint64 maxWaitMs = 8000;
+    if (!stable) {
+        if ((nowMs - job.firstSeenMs) < maxWaitMs) {
+            if (retryMs) *retryMs = 25;
+            return false;
+        }
         ++m_totalReadFails;
-        emit logRequested("读取失败",
-                          QString("%1 文件未就绪: %2 (from=%3)").arg(t, winPath, senderIp),
-                          "#F44336");
-        return;
+        const QString detail = QStringLiteral("NOT_READY: %1 exist=%2 size=%3").arg(usedPath).arg(exists ? 1 : 0).arg(sz);
+        noteReadFail(t, detail, senderIp, nowMs);
+        return true;
     }
 
     QImage loaded;
-    QString decErr;
-    const bool preferGray = (m_type == 1);
-    readImageWithRetry(winPath, preferGray, 1200, &loaded, &decErr);
+    QByteArray rawBytes;
+    {
+        const bool tee = (m_recordingEnabled && !m_recorder.isNull());
+        if (tee) {
+            QFile f(usedPath);
+            if (!f.open(QIODevice::ReadOnly)) {
+                ++job.tries;
+                if ((nowMs - job.firstSeenMs) < maxWaitMs && job.tries < 40) {
+                    if (retryMs) *retryMs = 30;
+                    return false;
+                }
+                decErr = QStringLiteral("open failed");
+            } else {
+                rawBytes = f.readAll();
+                f.close();
+                if (!rawBytes.isEmpty()) {
+                    QBuffer buf(&rawBytes);
+                    buf.open(QIODevice::ReadOnly);
+                    QImageReader reader(&buf);
+                    QImage img = reader.read();
+                    if (!img.isNull()) {
+                        if (preferGray) {
+                            if (img.format() != QImage::Format_Indexed8) img = img.convertToFormat(QImage::Format_Indexed8, grayColorTable());
+                            if (img.colorTable().isEmpty()) img.setColorTable(grayColorTable());
+                        } else {
+                            if (img.format() != QImage::Format_RGB32) img = img.convertToFormat(QImage::Format_RGB32);
+                        }
+                        loaded = img;
+                    } else {
+                        decErr = reader.errorString();
+                    }
+                } else {
+                    decErr = QStringLiteral("empty bytes");
+                }
+            }
+        } else {
+            QImageReader reader(usedPath);
+            QImage img = reader.read();
+            if (!img.isNull()) {
+                if (preferGray) {
+                    if (img.format() != QImage::Format_Indexed8) img = img.convertToFormat(QImage::Format_Indexed8, grayColorTable());
+                    if (img.colorTable().isEmpty()) img.setColorTable(grayColorTable());
+                } else {
+                    if (img.format() != QImage::Format_RGB32) img = img.convertToFormat(QImage::Format_RGB32);
+                }
+                loaded = img;
+            } else {
+                decErr = reader.errorString();
+            }
+        }
+    }
     if (loaded.isNull()) {
+        ++job.tries;
+        if ((nowMs - job.firstSeenMs) < maxWaitMs && job.tries < 40) {
+            if (retryMs) *retryMs = 30;
+            return false;
+        }
         ++m_totalReadFails;
-        emit logRequested("读取失败",
-                          QString("%1 解码失败: %2 err=%3").arg(t, winPath, decErr),
-                          "#F44336");
-        return;
+        noteReadFail(t, QStringLiteral("DECODE_FAIL: %1 err=%2").arg(usedPath, decErr), senderIp, nowMs);
+        return true;
+    }
+
+    if (!rawBytes.isEmpty() && !m_recorder.isNull()) {
+        const QString subType = (t == "GRAY") ? QStringLiteral("BW") : t;
+        const QString ext = QFileInfo(usedPath).suffix().trimmed().toLower();
+        QMetaObject::invokeMethod(
+            m_recorder.data(),
+            "enqueueFrame",
+            Qt::QueuedConnection,
+            Q_ARG(QString, subType),
+            Q_ARG(quint64, cacheFileIdx),
+            Q_ARG(qint64, nowMs),
+            Q_ARG(QString, usedPath),
+            Q_ARG(QString, job.sender),
+            Q_ARG(QString, ext),
+            Q_ARG(QByteArray, rawBytes)
+        );
     }
 
     if (m_type == 1) {
         QImage bwFull = loaded.convertToFormat(QImage::Format_Indexed8, grayColorTable());
         if (bwFull.isNull()) {
             ++m_totalReadFails;
-            emit logRequested("读取失败",
-                              QString("BW 转灰失败: %1").arg(winPath),
-                              "#F44336");
-            return;
+            noteReadFail(QStringLiteral("BW"), QStringLiteral("toGray failed: %1").arg(usedPath), senderIp, nowMs);
+            return true;
         }
         bwFull.setColorTable(grayColorTable());
-
-        if (m_fullSliceW <= 0 || m_fullSliceH <= 0) {
-            m_fullSliceW = bwFull.width();
-            m_fullSliceH = bwFull.height();
-        }
-        const int segments = (m_fullSliceW > 0) ? qMax(1, m_panorama.width() / m_fullSliceW) : 1;
-        const uint32_t imgIdx = m_pathBwFrameIndex++;
-
-        if (!m_panorama.isNull() && m_fullSliceW > 0) {
-            const int panoW = m_panorama.width();
-            const int panoH = m_panorama.height();
-            const int sliceW = m_fullSliceW;
-
-            const int tileIndex = (int)(imgIdx % (uint32_t)segments);
-            const int alignedIndex = (tileIndex + (segments / 2)) % segments;
-            const int startX = alignedIndex * sliceW;
-            QImage src = bwFull;
-            if (src.width() != sliceW || src.height() != panoH) {
-                src = src.scaled(sliceW, panoH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-                src = src.convertToFormat(QImage::Format_Indexed8, grayColorTable());
-                src.setColorTable(grayColorTable());
-            }
-
-            const int rightW = qMin(sliceW, panoW - startX);
-            const int leftW = sliceW - rightW;
-            QReadWriteLock *lockA = nullptr;
-            QReadWriteLock *lockB = nullptr;
-            if (!m_segLocks.isEmpty()) {
-                lockA = m_segLocks[bucketIndex(alignedIndex, m_segLocks.size())];
-                if (leftW > 0) lockB = m_segLocks[bucketIndex(0, m_segLocks.size())];
-            }
-            lockTwoWrite(lockA, lockB);
-            for (int y = 0; y < panoH; ++y) {
-                const uchar *srcLine = src.constScanLine(y);
-                uchar *dstLine = m_panorama.scanLine(y);
-                memcpy(dstLine + startX, srcLine, rightW);
-                if (leftW > 0) {
-                    memcpy(dstLine, srcLine + rightW, leftW);
-                }
-            }
-            unlockTwoWrite(lockA, lockB);
+        bwFull = rotateCCW90(bwFull);
+        if (bwFull.isNull()) {
+            ++m_totalReadFails;
+            noteReadFail(QStringLiteral("BW"), QStringLiteral("rotate failed: %1").arg(usedPath), senderIp, nowMs);
+            return true;
         }
 
-        const int uiPanoW = 8192;
-        const int previewW = qMax(1, uiPanoW / segments);
-        QImage preview = bwFull.scaled(previewW, 240, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-        preview = preview.convertToFormat(QImage::Format_Indexed8, grayColorTable());
-        preview.setColorTable(grayColorTable());
-        const double angleDeg = (double)((imgIdx + (uint32_t)(segments / 2)) % (uint32_t)segments) * 360.0 / (double)segments;
-        emit thermalFrameCaptured(preview.copy(), angleDeg);
+        if (m_cache) {
+            m_cache->pushBwFrame(bwFull, cacheFileIdx, usedPath, job.rxMs);
+            emit cacheUpdated();
+        }
         ++m_totalDecodedFrames;
-        return;
+        return true;
     }
 
     QImage rgbFull = loaded.convertToFormat(QImage::Format_RGB32);
     if (rgbFull.isNull()) {
         ++m_totalReadFails;
-        emit logRequested("读取失败",
-                          QString("RGB 转色失败: %1").arg(winPath),
-                          "#F44336");
-        return;
+        noteReadFail(QStringLiteral("RGB"), QStringLiteral("toRGB failed: %1").arg(usedPath), senderIp, nowMs);
+        return true;
+    }
+    rgbFull = rotateCCW90(rgbFull);
+    if (rgbFull.isNull()) {
+        ++m_totalReadFails;
+        noteReadFail(QStringLiteral("RGB"), QStringLiteral("rotate failed: %1").arg(usedPath), senderIp, nowMs);
+        return true;
     }
 
-    if (m_fullSliceW <= 0 || m_fullSliceH <= 0) {
-        m_fullSliceW = rgbFull.width();
-        m_fullSliceH = rgbFull.height();
+    if (m_cache) {
+        m_cache->pushRgbFrame(rgbFull, cacheFileIdx, usedPath, job.rxMs);
+        emit cacheUpdated();
     }
-    const int segments = (m_fullSliceW > 0) ? qMax(1, m_panorama.width() / m_fullSliceW) : 1;
-    const uint32_t imgIdx = m_pathRgbFrameIndex++;
-
-    if (!m_panorama.isNull() && m_fullSliceW > 0) {
-        const int panoW = m_panorama.width();
-        const int panoH = m_panorama.height();
-        const int sliceW = m_fullSliceW;
-        const int tileIndex = (int)(imgIdx % (uint32_t)segments);
-        const int startX = tileIndex * sliceW;
-
-        QImage src = rgbFull;
-        if (src.width() != sliceW || src.height() != panoH) {
-            src = src.scaled(sliceW, panoH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-            src = src.convertToFormat(QImage::Format_RGB32);
-        }
-
-        const int rightW = qMin(sliceW, panoW - startX);
-        const int leftW = sliceW - rightW;
-        QReadWriteLock *lockA = nullptr;
-        QReadWriteLock *lockB = nullptr;
-        if (!m_segLocks.isEmpty()) {
-            lockA = m_segLocks[bucketIndex(tileIndex, m_segLocks.size())];
-            if (leftW > 0) lockB = m_segLocks[bucketIndex(0, m_segLocks.size())];
-        }
-        lockTwoWrite(lockA, lockB);
-        for (int y = 0; y < panoH; ++y) {
-            const uchar *srcLine = src.constScanLine(y);
-            uchar *dstLine = m_panorama.scanLine(y);
-            memcpy(dstLine + startX * 4, srcLine, rightW * 4);
-            if (leftW > 0) {
-                memcpy(dstLine, srcLine + rightW * 4, leftW * 4);
-            }
-        }
-        unlockTwoWrite(lockA, lockB);
-    }
-
-    const int uiPanoW = 8192;
-    const int previewW = qMax(1, uiPanoW / segments);
-    QImage preview = rgbFull.scaled(previewW, 240, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-    const double angleDeg = (double)(imgIdx % (uint32_t)segments) * 360.0 / (double)segments;
-    emit frameCaptured(preview.copy(), angleDeg);
     ++m_totalDecodedFrames;
+    return true;
 }
 
 void VideoThread::onWorkerLogRequested(const QString &type, const QString &msg, const QString &color)

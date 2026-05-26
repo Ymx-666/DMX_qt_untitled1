@@ -1,11 +1,31 @@
-// 作用：程序入口，开启高 DPI 适配，确保界面在 1080P 和 4K 屏幕上比例一致
 #include "mainwindow.h"
 #include <QApplication>
+#include <QFont>
+#include <QFontDatabase>
 
 int main(int argc, char *argv[])
 {
-    // 关键：在创建 app 之前开启缩放支持
     QApplication a(argc, argv);
+    {
+        QFontDatabase db;
+        const QStringList fams = db.families();
+        const QStringList preferred =
+            QStringList()
+            << QStringLiteral("Microsoft YaHei")
+            << QStringLiteral("Microsoft YaHei UI")
+            << QStringLiteral("SimHei")
+            << QStringLiteral("SimSun")
+            << QStringLiteral("NSimSun")
+            << QStringLiteral("Arial Unicode MS");
+        QString chosen;
+        for (const QString &f : preferred) {
+            if (fams.contains(f)) {
+                chosen = f;
+                break;
+            }
+        }
+        if (!chosen.isEmpty()) a.setFont(QFont(chosen, 9));
+    }
     MainWindow w;
     w.show();
     return a.exec();

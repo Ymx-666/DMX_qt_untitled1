@@ -11,7 +11,7 @@
 TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget *parent)
     : QDialog(parent), m_driver(driver)
 {
-    this->setWindowTitle("云台快速控制中心");
+    this->setWindowTitle("Turntable Control");
     this->resize(350, 400);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
@@ -24,8 +24,8 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
     foreach (const QSerialPortInfo &info, QSerialPortInfo::availablePorts()) {
         cmbPorts->addItem(info.portName());
     }
-    btnOpenSerial = new QPushButton("打开串口", this);
-    laySerial->addWidget(new QLabel("串口:", this));
+    btnOpenSerial = new QPushButton("Open COM", this);
+    laySerial->addWidget(new QLabel("COM:", this));
     laySerial->addWidget(cmbPorts);
     laySerial->addWidget(btnOpenSerial);
     mainLayout->addLayout(laySerial);
@@ -37,20 +37,20 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
 
     cmbSpeed = new QComboBox(this);
     // addItem("显示的文字", 隐藏的物理指令值);
-    cmbSpeed->addItem("极速 (约1.32s/圈)", 255);
-    cmbSpeed->addItem("2s / 圈", 170);
-    cmbSpeed->addItem("4s / 圈", 85);
-    cmbSpeed->addItem("6s / 圈", 57);
-    cmbSpeed->addItem("8s / 圈", 43);
+    cmbSpeed->addItem("Fast (~1.32s/lap)", 255);
+    cmbSpeed->addItem("2s / lap", 170);
+    cmbSpeed->addItem("4s / lap", 85);
+    cmbSpeed->addItem("6s / lap", 57);
+    cmbSpeed->addItem("8s / lap", 43);
     // 默认选中 4s/圈 (索引2)
     cmbSpeed->setCurrentIndex(2);
 
-    btnLeft = new QPushButton("◀ 向左转", this);
-    btnRight = new QPushButton("向右转 ▶", this);
-    btnStop = new QPushButton("急停", this);
+    btnLeft = new QPushButton("Left", this);
+    btnRight = new QPushButton("Right", this);
+    btnStop = new QPushButton("STOP", this);
     btnStop->setStyleSheet("background-color: #ffcccc; font-weight: bold;");
 
-    layMove->addWidget(new QLabel("运行速度:"), 0, 0);
+    layMove->addWidget(new QLabel("Speed:"), 0, 0);
     layMove->addWidget(cmbSpeed, 0, 1, 1, 2);
     layMove->addWidget(btnLeft, 1, 0);
     layMove->addWidget(btnStop, 1, 1);
@@ -61,15 +61,15 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
     // 3. 正交与回传区
     // ==========================================
     QGridLayout *layAdvanced = new QGridLayout();
-    btnEnableOrtho = new QPushButton("开正交", this);
-    btnDisableOrtho = new QPushButton("关正交", this);
+    btnEnableOrtho = new QPushButton("Ortho ON", this);
+    btnDisableOrtho = new QPushButton("Ortho OFF", this);
     cmbOrthoLength = new QComboBox(this);
     cmbOrthoLength->addItems({"256", "512", "1024", "2048", "4096"});
-    btnSetLength = new QPushButton("设置打包长度", this);
+    btnSetLength = new QPushButton("Set Pack Len", this);
 
-    btnEnableFeedback = new QPushButton("开启实时回传", this);
+    btnEnableFeedback = new QPushButton("Feedback ON", this);
     btnEnableFeedback->setStyleSheet("color: green;");
-    btnDisableFeedback = new QPushButton("关闭实时回传", this);
+    btnDisableFeedback = new QPushButton("Feedback OFF", this);
     btnDisableFeedback->setStyleSheet("color: red;");
 
     layAdvanced->addWidget(btnEnableOrtho, 0, 0);
@@ -88,18 +88,18 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
         QCoreApplication::processEvents();
         if (m_driver->isOpen()) {
             m_driver->closePort();
-            btnOpenSerial->setText("打开串口");
+            btnOpenSerial->setText("Open COM");
         } else {
             if (m_driver->openPort(cmbPorts->currentText())) {
-                btnOpenSerial->setText("关闭串口");
+                btnOpenSerial->setText("Close COM");
             } else {
-                QMessageBox::warning(this, "错误", "串口打开失败！");
+                QMessageBox::warning(this, "Error", "Open COM failed");
             }
         }
         btnOpenSerial->setEnabled(true);
     });
 
-    // 1. 点击“向左转/向右转”，下发运动指令，读取下拉框隐藏的 currentData 值
+    // speed control
     connect(btnLeft, &QPushButton::clicked, this, [=]() {
         m_driver->turnLeft(cmbSpeed->currentData().toInt());
     });

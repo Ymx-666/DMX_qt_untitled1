@@ -1,4 +1,4 @@
-#ifndef RADARWIDGET_H
+﻿#ifndef RADARWIDGET_H
 #define RADARWIDGET_H
 
 #include <QWidget>

@@ -6,10 +6,10 @@
 
 | 组件 | 状态 | 路径 |
 |------|------|------|
-| **Qt 5.4.2** | ✅ 已安装 | `E:\.trae\qt5.4.2\5.4\msvc2013_64_opengl\` |
-| **OpenCV** | ✅ 已部署 | `win_setup_test/3rdparty/opencv/build/` |
-| **FFmpeg** | ✅ 已部署 | `win_setup_test/3rdparty/ffmpeg/` |
-| **MSVC 2013 编译器** | ⏳ **待安装** | 需安装 Visual Studio 2013 或 Build Tools |
+| **Qt 5.4 (MinGW 32-bit)** | ✅ 已安装 | `E:\qt5.4\5.4\mingw491_32\` |
+| **Qt 5.4 (MSVC 2013 64-bit)** | ✅ 已安装 | `E:\.trae\Qt\5.4\msvc2013_64\` |
+| **MSVC 2013 编译器** | ✅ 已安装 | `E:\.trae\Microsoft Visual Studio 12.0\` |
+| **OpenCV / FFmpeg (MSVC x64)** | 可选 | 不影响编译；如启用需 `.lib/.dll` |
 
 ---
 
@@ -21,7 +21,15 @@
 
 ---
 
-## 2. 编译项目
+## 2. 安装 Qt 5.4 (MSVC 2013 64-bit)
+
+- 安装 Qt 5.4 的 **MSVC2013 64-bit** 套件（例如 `E:\.trae\Qt\5.4\msvc2013_64\`）
+- 确保 `qmake.exe` 存在于：
+  - `...\msvc2013_64\bin\qmake.exe`
+
+---
+
+## 3. 编译项目
 
 ### 自动编译 (推荐)
 双击运行 [build_msvc2013.bat](file:///e:/.trae/program/DMX_qt/untitled1/win_setup_test/build_msvc2013.bat)，脚本会自动：
@@ -34,13 +42,19 @@
 2. 执行：
 ```bash
 cd E:\.trae\program\DMX_qt\untitled1
-E:\.trae\qt5.4.2\5.4\msvc2013_64_opengl\bin\qmake.exe -spec win32-msvc2013
+E:\Qt\5.4\msvc2013_64\bin\qmake.exe -spec win32-msvc2013
 nmake
 ```
 
 ---
 
-## 3. 运行时注意事项
+## 4. 依赖库注意事项（OpenCV/FFmpeg）
+
+当前工程对 OpenCV/FFmpeg 不做硬依赖（未配置时也可编译）。如需启用，请提供与 MSVC2013 x64 匹配的 `.lib/.dll` 并在 qmake 时传入路径变量。
+
+---
+
+## 5. 运行时注意事项
 
 - 可执行文件生成在 `release/` 或 `debug/` 目录
-- 运行前请确保 DLL 路径已加入 PATH，或将 FFmpeg/OpenCV 的 `bin` 目录下的 `.dll` 文件复制到 `.exe` 同目录下
+- 运行前请确保 Qt/OpenCV/FFmpeg 的 `.dll` 文件与 `.exe` 位于同目录，或对应 `bin` 已加入 PATH
