@@ -37,6 +37,28 @@
 
 static inline QString u8s(const char *s) { return QString::fromUtf8(s); }
 
+static QString resolveSaveRoot()
+{
+    QString r = QString::fromLocal8Bit(qgetenv("DMX_SAVE_ROOT"));
+    if (!r.isEmpty()) return r;
+#ifdef Q_OS_WIN
+    return QStringLiteral("E:/.trae/program/DMX_qt/untitled1/data/SAVES");
+#else
+    return QDir::homePath() + QStringLiteral("/dmx_data/saves");
+#endif
+}
+
+static QString resolveRecordRoot()
+{
+    QString r = QString::fromLocal8Bit(qgetenv("DMX_REC_ROOT"));
+    if (!r.isEmpty()) return r;
+#ifdef Q_OS_WIN
+    return QStringLiteral("D:/DMX_data");
+#else
+    return QDir::homePath() + QStringLiteral("/dmx_data/recordings");
+#endif
+}
+
 
 const QString DEVICE_IP = "192.168.4.1";
 const quint16 CMD_PORT_SEND = 5001;
@@ -302,7 +324,7 @@ MainWindow::MainWindow(QWidget *parent) :
            QStringLiteral("BUILD compiled=%1 %2").arg(QStringLiteral(__DATE__), QStringLiteral(__TIME__)),
            QStringLiteral("#FFD54F"));
     addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"),
-           QStringLiteral("BUILD saveRoot=E:/.trae/program/DMX_qt/untitled1/data/SAVES recRoot=D:/DMX_data"),
+           QStringLiteral("BUILD saveRoot=%1 recRoot=%2").arg(resolveSaveRoot(), resolveRecordRoot()),
            QStringLiteral("#FFD54F"));
     QWidget *central = new QWidget(this);
     setCentralWidget(central);
@@ -772,7 +794,7 @@ void MainWindow::onToggleRecording()
     if (m_thermalThread) m_thermalThread->setRecordingEnabled(enable);
 
     if (enable) {
-        QMetaObject::invokeMethod(m_recordWorker, "startRecording", Qt::QueuedConnection, Q_ARG(QString, QStringLiteral("D:/DMX_data")), Q_ARG(int, 10));
+        QMetaObject::invokeMethod(m_recordWorker, "startRecording", Qt::QueuedConnection, Q_ARG(QString, resolveRecordRoot()), Q_ARG(int, 10));
         addLog(QStringLiteral("REC"), QStringLiteral("Start"), QStringLiteral("#569CD6"));
         return;
     }
@@ -857,7 +879,7 @@ void MainWindow::onSaveFullPanoramaClicked()
         addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), QString("Incomplete: RGB=%1/%2 BW=%3/%4").arg(rgb.validFrames).arg(rgb.segments).arg(bw.validFrames).arg(bw.segments), "#FFA500");
     }
 
-    const QString baseDir = "E:/.trae/program/DMX_qt/untitled1/data/SAVES";
+    const QString baseDir = resolveSaveRoot();
     if (!QDir().mkpath(baseDir)) {
         addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), u8s("\xE5\x88\x9B\xE5\xBB\xBA\xE7\x9B\xAE\xE5\xBD\x95\xE5\xA4\xB1\xE8\xB4\xA5\x3A\x20") + baseDir, "#F44336");
         return;

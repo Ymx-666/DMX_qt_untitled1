@@ -17,6 +17,8 @@ build/
 bin/
 debug/
 release/
+build_linux/
+build_msvc2013/
 
 # qmake generated artifacts
 ui_*.h

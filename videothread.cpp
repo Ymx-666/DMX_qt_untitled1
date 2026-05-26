@@ -99,9 +99,16 @@ static QString mapDevicePathToWindowsShare(QString path, const QString &senderIp
     }
 
     if (path.startsWith("/data/")) {
+#ifdef Q_OS_WIN
         const QString ip = senderIp.isEmpty() ? QString("192.168.4.1") : senderIp;
         path = "\\\\" + ip + "\\data\\" + path.mid(QString("/data/").length());
         path.replace("/", "\\");
+#else
+        Q_UNUSED(senderIp);
+        QString mount = QString::fromLocal8Bit(qgetenv("DMX_SHARE_MOUNT"));
+        if (mount.isEmpty()) mount = QStringLiteral("/mnt/dmx_share");
+        path = mount + path.mid(QString("/data").length());
+#endif
     }
 
     return path;
