@@ -19,6 +19,7 @@
 #include <QThread>
 #include <QSharedPointer>
 #include <QAtomicInteger>
+#include <QFile>
 
 // 先引入组件头文件
 #include "panoramawidget.h"
@@ -188,6 +189,8 @@ private:
     QThread *m_recordThread = nullptr;
     RawRecorder *m_recordWorker = nullptr;
     bool m_isRecording = false;
+
+    QFile *m_logFile = nullptr;
 };
 
 #endif // MAINWINDOW_H

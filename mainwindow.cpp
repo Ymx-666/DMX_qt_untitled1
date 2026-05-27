@@ -59,6 +59,17 @@ static QString resolveRecordRoot()
 #endif
 }
 
+static QString resolveLogRoot()
+{
+    QString r = QString::fromLocal8Bit(qgetenv("DMX_LOG_ROOT"));
+    if (!r.isEmpty()) return r;
+#ifdef Q_OS_WIN
+    return QStringLiteral("E:/.trae/program/DMX_qt/untitled1/data/logs");
+#else
+    return QDir::homePath() + QStringLiteral("/dmx_data/logs");
+#endif
+}
+
 
 const QString DEVICE_IP = "192.168.4.1";
 const quint16 CMD_PORT_SEND = 5001;
@@ -279,6 +290,25 @@ MainWindow::MainWindow(QWidget *parent) :
     m_isDeviceOpen = false;
     m_lastDetectMs = 0;
     m_lastLogMs = 0;
+
+    {
+        const QDateTime now = QDateTime::currentDateTime();
+        const QString logRoot = resolveLogRoot();
+        char dateBuf[16];
+        qsnprintf(dateBuf, sizeof(dateBuf), "%04d-%02d-%02d",
+            now.date().year(), now.date().month(), now.date().day());
+        const QString dateDir = QDir(logRoot).filePath(QString::fromLatin1(dateBuf));
+        QDir().mkpath(dateDir);
+        char fileBuf[32];
+        qsnprintf(fileBuf, sizeof(fileBuf), "log_%02d-%02d-%02d.txt",
+            now.time().hour(), now.time().minute(), now.time().second());
+        const QString logPath = QDir(dateDir).filePath(QString::fromLatin1(fileBuf));
+        m_logFile = new QFile(logPath);
+        if (!m_logFile->open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+            delete m_logFile;
+            m_logFile = nullptr;
+        }
+    }
     m_renderPending.storeRelease(0);
     m_panoCache = QSharedPointer<PanoramaCache>(new PanoramaCache());
     {
@@ -325,6 +355,10 @@ MainWindow::MainWindow(QWidget *parent) :
            QStringLiteral("#FFD54F"));
     addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"),
            QStringLiteral("BUILD saveRoot=%1 recRoot=%2").arg(resolveSaveRoot(), resolveRecordRoot()),
+           QStringLiteral("#FFD54F"));
+    addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"),
+           QStringLiteral("BUILD logRoot=%1 (file=%2)").arg(resolveLogRoot(),
+               m_logFile ? m_logFile->fileName() : QStringLiteral("(disabled)")),
            QStringLiteral("#FFD54F"));
     QWidget *central = new QWidget(this);
     setCentralWidget(central);
@@ -566,6 +600,11 @@ MainWindow::~MainWindow()
     if (m_saveThread) { m_saveThread->quit(); m_saveThread->wait(); }
     if (m_roiThread) { m_roiThread->quit(); m_roiThread->wait(); }
     if (m_recordThread) { m_recordThread->quit(); m_recordThread->wait(); }
+    if (m_logFile) {
+        if (m_logFile->isOpen()) m_logFile->close();
+        delete m_logFile;
+        m_logFile = nullptr;
+    }
     delete ui;
 }
 
@@ -592,6 +631,18 @@ void MainWindow::setupLogDock()
 
 void MainWindow::addLog(const QString &type, const QString &msg, const QString &color)
 {
+    const QTime ct = QTime::currentTime();
+    char tsBuf[32];
+    qsnprintf(tsBuf, sizeof(tsBuf), "%02d:%02d:%02d.%03d",
+        ct.hour(), ct.minute(), ct.second(), ct.msec());
+
+    if (m_logFile && m_logFile->isOpen()) {
+        const QByteArray line = (QStringLiteral("[") + QString::fromLatin1(tsBuf) + QStringLiteral("] [")
+            + type + QStringLiteral("] ") + msg + QStringLiteral("\n")).toUtf8();
+        m_logFile->write(line);
+        m_logFile->flush();
+    }
+
     if (!m_logBrowser) return;
     const qint64 nowMs = m_perfTimer.isValid() ? m_perfTimer.elapsed() : 0;
     const bool important =
@@ -602,10 +653,6 @@ void MainWindow::addLog(const QString &type, const QString &msg, const QString &
         type.startsWith(QStringLiteral("RX("));
     if (!important && (nowMs - m_lastLogMs) < 15) return;
     m_lastLogMs = nowMs;
-    const QTime ct = QTime::currentTime();
-    char tsBuf[32];
-    qsnprintf(tsBuf, sizeof(tsBuf), "%02d:%02d:%02d.%03d",
-        ct.hour(), ct.minute(), ct.second(), ct.msec());
     const QString timeStr = QString::fromLatin1(tsBuf);
 
     QTextCursor c = m_logBrowser->textCursor();

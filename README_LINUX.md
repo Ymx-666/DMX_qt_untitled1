@@ -43,7 +43,10 @@ sudo apt install -y \
 |---|---|---|
 | 保存全图 | `~/dmx_data/saves` | `DMX_SAVE_ROOT` |
 | 录制 raw | `~/dmx_data/recordings` | `DMX_REC_ROOT` |
+| 日志文件 | `~/dmx_data/logs/<YYYY-MM-DD>/log_<HH-MM-SS>.txt` | `DMX_LOG_ROOT` |
 | 共享盘挂载点 | `/mnt/dmx_share` | `DMX_SHARE_MOUNT` |
+
+日志按当天日期建二级子目录，每次启动程序新建一个 `log_HH-MM-SS.txt` 文件，每条日志立即 flush 落盘，崩溃时也能保留全部历史。
 
 示例：
 
