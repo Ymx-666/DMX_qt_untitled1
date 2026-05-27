@@ -575,7 +575,7 @@ void MainWindow::setupLogDock()
     dock->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
 
     m_logBrowser = new QTextBrowser(dock);
-    m_logBrowser->setStyleSheet("background-color: #1E1E1E; color: #D4D4D4; font-family: 'Consolas','Microsoft YaHei','Microsoft YaHei UI','SimSun','NSimSun',monospace; font-size: 10pt;");
+    m_logBrowser->setStyleSheet("QTextBrowser { background-color: #16161e; color: #d4d4d4; font-family: 'Consolas','Source Code Pro','DejaVu Sans Mono','Microsoft YaHei UI',monospace; font-size: 10pt; border: 1px solid #3a3a4e; border-radius: 4px; }");
     {
         QFont f(QStringLiteral("Consolas"));
         f.setStyleHint(QFont::Monospace);
@@ -666,30 +666,6 @@ void MainWindow::createToolBar()
 
     m_mainToolBar->setFixedHeight(40);
     m_mainToolBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
-
-    m_mainToolBar->setStyleSheet(
-        "QToolBar { "
-        "   background-color: #f0f0f0; "
-        "   border-bottom: 1px solid #cccccc; "
-        "   spacing: 10px; "
-        "} "
-        "QToolButton { "
-        "   font-family: 'Microsoft YaHei','Microsoft YaHei UI','SimHei','SimSun','NSimSun','Arial Unicode MS',sans-serif; "
-        "   font-weight: bold; "
-        "   font-size: 14px; "
-        "   color: #000000; "
-        "   padding: 6px 12px; "
-        "   border: none; "
-        "   border-radius: 4px; "
-        "   background-color: transparent; "
-        "} "
-        "QToolButton:hover { "
-        "   background-color: #dcdcdc; "
-        "} "
-        "QToolButton:disabled { "
-        "   color: #a0a0a0; "
-        "}"
-    );
 
     m_actOpenDevice = new QAction(u8s("\xE8\xAE\xBE\xE5\xA4\x87\xE8\xBF\x90\xE8\xA1\x8C"), this);
     m_actCloseDevice = new QAction(u8s("\xE8\xAE\xBE\xE5\xA4\x87\xE5\x81\x9C\xE6\xAD\xA2"), this);

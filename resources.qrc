@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/">
+        <file>dark_modern.qss</file>
+    </qresource>
+</RCC>

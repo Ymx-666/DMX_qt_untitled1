@@ -1,5 +1,6 @@
 #include "mainwindow.h"
 #include <QApplication>
+#include <QFile>
 #include <QFont>
 #include <QFontDatabase>
 
@@ -11,11 +12,13 @@ int main(int argc, char *argv[])
         const QStringList fams = db.families();
         const QStringList preferred =
             QStringList()
-            << QStringLiteral("Microsoft YaHei")
             << QStringLiteral("Microsoft YaHei UI")
+            << QStringLiteral("Microsoft YaHei")
+            << QStringLiteral("PingFang SC")
+            << QStringLiteral("Noto Sans CJK SC")
+            << QStringLiteral("Source Han Sans SC")
             << QStringLiteral("SimHei")
             << QStringLiteral("SimSun")
-            << QStringLiteral("NSimSun")
             << QStringLiteral("Arial Unicode MS");
         QString chosen;
         for (const QString &f : preferred) {
@@ -25,6 +28,13 @@ int main(int argc, char *argv[])
             }
         }
         if (!chosen.isEmpty()) a.setFont(QFont(chosen, 9));
+    }
+    {
+        QFile qss(QStringLiteral(":/dark_modern.qss"));
+        if (qss.open(QFile::ReadOnly | QFile::Text)) {
+            a.setStyleSheet(QString::fromUtf8(qss.readAll()));
+            qss.close();
+        }
     }
     MainWindow w;
     w.show();

@@ -50,6 +50,9 @@ HEADERS += mainwindow.h \
 # 5. UI 设计文件
 FORMS += mainwindow.ui
 
+# 6. Qt 资源（QSS 样式等）
+RESOURCES += resources.qrc
+
 # 6. 包含路径设置
 # 如果 FFmpeg 头文件不在标准路径，请取消下行注释并修改路径
 # INCLUDEPATH += /usr/include/ffmpeg

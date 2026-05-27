@@ -80,6 +80,10 @@ private:
     quint64 m_totalDroppedPackets = 0;
     quint64 m_totalReadFails = 0;
 
+    quint64 m_handleMsAccum = 0;
+    quint64 m_handleMsMax = 0;
+    quint64 m_handleCount = 0;
+
     quint64 m_lastStatRxPackets = 0;
     quint64 m_lastStatDecodedFrames = 0;
     quint64 m_lastStatDroppedPackets = 0;

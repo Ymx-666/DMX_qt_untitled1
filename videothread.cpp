@@ -297,6 +297,9 @@ void VideoWorker::start()
     m_totalDecodedFrames = 0;
     m_totalDroppedPackets = 0;
     m_totalReadFails = 0;
+    m_handleMsAccum = 0;
+    m_handleMsMax = 0;
+    m_handleCount = 0;
     m_totalReadyReadCalls = 0;
     m_totalDatagramsRead = 0;
     m_lastDatagramLen = 0;
@@ -341,7 +344,7 @@ void VideoWorker::start()
     }
 
     m_statTimer = new QTimer(this);
-    const int statIntervalMs = 3000;
+    const int statIntervalMs = 1000;
     m_statTimer->setInterval(statIntervalMs);
     connect(m_statTimer, &QTimer::timeout, this, &VideoWorker::onStatTick);
     m_statTimer->start();
@@ -526,6 +529,17 @@ void VideoWorker::onStatTick()
     };
     flushSeq("RGB", m_seqRgb);
     flushSeq("BW", m_seqBw);
+
+    if (m_handleCount > 0) {
+        const quint64 avg = m_handleMsAccum / m_handleCount;
+        emit logRequested(
+            QStringLiteral("FPS"),
+            QString("frames=%1/s avg=%2ms max=%3ms").arg(m_handleCount).arg(avg).arg(m_handleMsMax),
+            QStringLiteral("#FFD54F"));
+        m_handleMsAccum = 0;
+        m_handleMsMax = 0;
+        m_handleCount = 0;
+    }
 }
 
 void VideoWorker::noteReadFail(const QString &subType, const QString &detail, const QString &senderIp, qint64 nowMs)
@@ -727,6 +741,8 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
 {
     if (retryMs) *retryMs = 0;
     if (!m_running) return true;
+    QElapsedTimer handleTimer;
+    handleTimer.start();
     ++m_totalRxPackets;
     m_lastSender = job.sender;
 
@@ -894,6 +910,12 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
             emit cacheUpdated();
         }
         ++m_totalDecodedFrames;
+        {
+            const quint64 dt = (quint64)handleTimer.elapsed();
+            m_handleMsAccum += dt;
+            if (dt > m_handleMsMax) m_handleMsMax = dt;
+            ++m_handleCount;
+        }
         return true;
     }
 
@@ -915,6 +937,12 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
         emit cacheUpdated();
     }
     ++m_totalDecodedFrames;
+    {
+        const quint64 dt = (quint64)handleTimer.elapsed();
+        m_handleMsAccum += dt;
+        if (dt > m_handleMsMax) m_handleMsMax = dt;
+        ++m_handleCount;
+    }
     return true;
 }
 
