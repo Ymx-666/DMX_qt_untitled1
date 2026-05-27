@@ -38,6 +38,33 @@ static const QVector<QRgb>& grayColorTable()
     return t;
 }
 
+// 把任意输入快速归一为 Indexed8 灰度，避免 convertToFormat 的逐像素调色板匹配。
+// 设备方给的 BW jpg 解码后通常已经是 Grayscale8 或 Indexed8，byte 布局完全相同，
+// 此时只需要重打格式标签 + 设置灰度调色板。
+static QImage toIndexed8Gray(const QImage &src)
+{
+    if (src.isNull()) return src;
+    if (src.format() == QImage::Format_Indexed8) {
+        if (src.colorTable().isEmpty()) {
+            QImage out = src;
+            out.setColorTable(grayColorTable());
+            return out;
+        }
+        return src;
+    }
+#if QT_VERSION >= QT_VERSION_CHECK(5, 5, 0)
+    if (src.format() == QImage::Format_Grayscale8) {
+        QImage shallow(src.constBits(), src.width(), src.height(),
+                       src.bytesPerLine(), QImage::Format_Indexed8);
+        shallow.setColorTable(grayColorTable());
+        return shallow.copy();
+    }
+#endif
+    QImage out = src.convertToFormat(QImage::Format_Indexed8, grayColorTable());
+    if (out.colorTable().isEmpty()) out.setColorTable(grayColorTable());
+    return out;
+}
+
 static QImage rotateCCW90(const QImage &src)
 {
     if (src.isNull()) return QImage();
@@ -833,8 +860,7 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
                     QImage img = reader.read();
                     if (!img.isNull()) {
                         if (preferGray) {
-                            if (img.format() != QImage::Format_Indexed8) img = img.convertToFormat(QImage::Format_Indexed8, grayColorTable());
-                            if (img.colorTable().isEmpty()) img.setColorTable(grayColorTable());
+                            img = toIndexed8Gray(img);
                         } else {
                             if (img.format() != QImage::Format_RGB32) img = img.convertToFormat(QImage::Format_RGB32);
                         }
@@ -850,9 +876,15 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
             QImageReader reader(usedPath);
             QImage img = reader.read();
             if (!img.isNull()) {
+                if (!m_loggedFormat) {
+                    m_loggedFormat = true;
+                    emit logRequested(QStringLiteral("FMT"),
+                        QString("type=%1 decoded=Format_%2 size=%3x%4")
+                            .arg(m_type).arg((int)img.format()).arg(img.width()).arg(img.height()),
+                        QStringLiteral("#FFD54F"));
+                }
                 if (preferGray) {
-                    if (img.format() != QImage::Format_Indexed8) img = img.convertToFormat(QImage::Format_Indexed8, grayColorTable());
-                    if (img.colorTable().isEmpty()) img.setColorTable(grayColorTable());
+                    img = toIndexed8Gray(img);
                 } else {
                     if (img.format() != QImage::Format_RGB32) img = img.convertToFormat(QImage::Format_RGB32);
                 }
@@ -891,13 +923,12 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
     }
 
     if (m_type == 1) {
-        QImage bwFull = loaded.convertToFormat(QImage::Format_Indexed8, grayColorTable());
-        if (bwFull.isNull()) {
+        QImage bwFull = loaded;
+        if (bwFull.isNull() || bwFull.format() != QImage::Format_Indexed8) {
             ++m_totalReadFails;
             noteReadFail(QStringLiteral("BW"), QStringLiteral("toGray failed: %1").arg(usedPath), senderIp, nowMs);
             return true;
         }
-        bwFull.setColorTable(grayColorTable());
         bwFull = rotateCCW90(bwFull);
         if (bwFull.isNull()) {
             ++m_totalReadFails;
