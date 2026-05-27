@@ -18,25 +18,22 @@ fi
 
 sudo mkdir -p "$MOUNT_POINT"
 
-echo "挂载 //$DEVICE_IP/data -> $MOUNT_POINT ..."
-if sudo mount -t cifs "//$DEVICE_IP/data" "$MOUNT_POINT" \
-    -o "guest,vers=1.0,uid=$(id -u),gid=$(id -g),file_mode=0644,dir_mode=0755" 2>/dev/null; then
-    echo "挂载成功。前 10 项内容："
-    ls "$MOUNT_POINT" 2>&1 | head -10
-    exit 0
-fi
-
-echo "guest + vers=1.0 失败，尝试 vers=2.0 ..."
-if sudo mount -t cifs "//$DEVICE_IP/data" "$MOUNT_POINT" \
-    -o "guest,vers=2.0,uid=$(id -u),gid=$(id -g),file_mode=0644,dir_mode=0755" 2>/dev/null; then
-    echo "挂载成功（vers=2.0）。"
-    ls "$MOUNT_POINT" 2>&1 | head -10
-    exit 0
-fi
+# 优先尝试 SMB 协议版本顺序: v3.0 -> v2.1 -> v2.0 -> v1.0
+for VERS in 3.0 2.1 2.0 1.0; do
+    echo "尝试挂载 //$DEVICE_IP/data -> $MOUNT_POINT (SMB vers=$VERS) ..."
+    if sudo mount -t cifs "//$DEVICE_IP/data" "$MOUNT_POINT" \
+        -o "guest,vers=$VERS,uid=$(id -u),gid=$(id -g),file_mode=0644,dir_mode=0755" 2>/dev/null; then
+        echo "挂载成功（SMB vers=$VERS）。前 10 项内容："
+        ls "$MOUNT_POINT" 2>&1 | head -10
+        exit 0
+    fi
+done
 
 echo ""
 echo "自动挂载失败。可能原因："
 echo "  1. 共享需要账号密码 → sudo mount -t cifs //$DEVICE_IP/data $MOUNT_POINT -o username=USER"
-echo "  2. SMB 版本不匹配 → 试试 vers=3.0"
-echo "  3. 设备未开启共享"
+echo "  2. 设备禁用了所有 SMB 协议版本"
+echo "  3. 防火墙阻断"
+echo ""
+echo "诊断: smbclient -L //$DEVICE_IP -N"
 exit 1
