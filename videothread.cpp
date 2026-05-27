@@ -39,8 +39,10 @@ static const QVector<QRgb>& grayColorTable()
 }
 
 // 把任意输入快速归一为 Indexed8 灰度，避免 convertToFormat 的逐像素调色板匹配。
-// 设备方给的 BW jpg 解码后通常已经是 Grayscale8 或 Indexed8，byte 布局完全相同，
-// 此时只需要重打格式标签 + 设置灰度调色板。
+//
+// 设备方给的 BW jpg 经过实测是 3 通道 RGB jpg（R=G=B 的伪灰度），Qt 解码出 Format_RGB32。
+// Qt 自带的 convertToFormat(Indexed8) 会逐像素做 luminance + palette matching，
+// 对 4096x4096 图像约 60-100ms。手写循环只提取 R 通道（R==G==B），可省一半时间。
 static QImage toIndexed8Gray(const QImage &src)
 {
     if (src.isNull()) return src;
@@ -60,6 +62,22 @@ static QImage toIndexed8Gray(const QImage &src)
         return shallow.copy();
     }
 #endif
+    if (src.format() == QImage::Format_RGB32 || src.format() == QImage::Format_ARGB32 ||
+        src.format() == QImage::Format_ARGB32_Premultiplied) {
+        const int w = src.width();
+        const int h = src.height();
+        QImage out(w, h, QImage::Format_Indexed8);
+        if (out.isNull()) return out;
+        out.setColorTable(grayColorTable());
+        for (int y = 0; y < h; ++y) {
+            const QRgb *s = reinterpret_cast<const QRgb*>(src.constScanLine(y));
+            uchar *d = out.scanLine(y);
+            for (int x = 0; x < w; ++x) {
+                d[x] = (uchar)qRed(s[x]);
+            }
+        }
+        return out;
+    }
     QImage out = src.convertToFormat(QImage::Format_Indexed8, grayColorTable());
     if (out.colorTable().isEmpty()) out.setColorTable(grayColorTable());
     return out;
