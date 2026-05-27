@@ -128,7 +128,8 @@ void PanoramaSaver::process()
     QJsonArray rgbTiles;
 
     QJsonObject bwObj;
-    bwObj.insert(QStringLiteral("format"), QStringLiteral("png"));
+    bwObj.insert(QStringLiteral("format"), QStringLiteral("jpg"));
+    bwObj.insert(QStringLiteral("quality"), job.rgbJpegQuality);
     QJsonArray bwTiles;
 
     const QByteArray env = qgetenv("PANO_SAVE_RAW");
@@ -206,10 +207,10 @@ void PanoramaSaver::process()
             schedule();
             return;
         }
-        const QString bwName = QStringLiteral("bw_") + padDec(tile, 4) + QStringLiteral(".png");
+        const QString bwName = QStringLiteral("bw_") + padDec(tile, 4) + QStringLiteral(".jpg");
         const QString bwPath = QDir(bwDir).filePath(bwName);
         err.clear();
-        if (!writeImageFile(bwPath, bwTile, "png", -1, &err)) {
+        if (!writeImageFile(bwPath, bwTile, "jpg", job.rgbJpegQuality, &err)) {
             emit saveFinished(job.id, false, QStringLiteral("BW write failed: %1").arg(err), job.outDir);
             schedule();
             return;

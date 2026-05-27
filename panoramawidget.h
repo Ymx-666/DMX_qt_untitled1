@@ -14,6 +14,7 @@ public:
     void updateImagePartial(const QImage &img, const QRect &dirtyInImageCoords);
     void setSelectionBoxWidth(int width);
     void setSelectedAngle(double angle);
+    void setShowRuler(bool show);
 
 signals:
     void angleSelected(double angle);
@@ -26,6 +27,7 @@ private:
     QImage m_image;
     double m_selectedAngle = -1.0;
     int m_roiPixelWidth = 100;
+    bool m_showRuler = true;
 };
 
 #endif

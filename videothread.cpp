@@ -890,7 +890,7 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
         }
 
         if (m_cache) {
-            m_cache->pushBwFrame(bwFull, cacheFileIdx, usedPath, job.rxMs);
+            m_cache->pushBwFrame(bwFull, cacheFileIdx, usedPath, job.rxMs, job.angleDeg);
             emit cacheUpdated();
         }
         ++m_totalDecodedFrames;
@@ -911,7 +911,7 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
     }
 
     if (m_cache) {
-        m_cache->pushRgbFrame(rgbFull, cacheFileIdx, usedPath, job.rxMs);
+        m_cache->pushRgbFrame(rgbFull, cacheFileIdx, usedPath, job.rxMs, job.angleDeg);
         emit cacheUpdated();
     }
     ++m_totalDecodedFrames;

@@ -48,6 +48,8 @@ public:
     void pushBwFrame(const QImage &frameBwIndexed8, quint64 fileIndex);
     void pushRgbFrame(const QImage &frameRgb32, quint64 fileIndex, const QString &sourcePath, qint64 rxMs);
     void pushBwFrame(const QImage &frameBwIndexed8, quint64 fileIndex, const QString &sourcePath, qint64 rxMs);
+    void pushRgbFrame(const QImage &frameRgb32, quint64 fileIndex, const QString &sourcePath, qint64 rxMs, double angleDeg);
+    void pushBwFrame(const QImage &frameBwIndexed8, quint64 fileIndex, const QString &sourcePath, qint64 rxMs, double angleDeg);
 
     QImage snapshotThumbRgb() const;
     QImage snapshotThumbBw() const;
@@ -112,7 +114,7 @@ private:
     static QImage ensureBw8(const QImage &img);
     static double normalize360(double a);
 
-    void pushFrameInternal(Stream &s, const QImage &frame, bool isRgb, quint64 fileIndex, const QString &sourcePath, qint64 rxMs);
+    void pushFrameInternal(Stream &s, const QImage &frame, bool isRgb, quint64 fileIndex, const QString &sourcePath, qint64 rxMs, double angleDeg);
     QImage snapshotInternalThumb(const Stream &s) const;
     QImage extractSliceInternal(const Stream &s, double angleDeg, bool allow180Fallback) const;
     QImage extractThumbSliceInternal(const Stream &s, double angleDeg, bool allow180Fallback) const;

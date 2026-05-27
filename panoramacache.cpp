@@ -122,32 +122,42 @@ void PanoramaCache::resetAll()
 
 void PanoramaCache::pushRgbFrame(const QImage &frameRgb32)
 {
-    pushFrameInternal(m_rgb, frameRgb32, true, 0, QString(), 0);
+    pushFrameInternal(m_rgb, frameRgb32, true, 0, QString(), 0, -1.0);
 }
 
 void PanoramaCache::pushBwFrame(const QImage &frameBwIndexed8)
 {
-    pushFrameInternal(m_bw, frameBwIndexed8, false, 0, QString(), 0);
+    pushFrameInternal(m_bw, frameBwIndexed8, false, 0, QString(), 0, -1.0);
 }
 
 void PanoramaCache::pushRgbFrame(const QImage &frameRgb32, quint64 fileIndex)
 {
-    pushFrameInternal(m_rgb, frameRgb32, true, fileIndex, QString(), 0);
+    pushFrameInternal(m_rgb, frameRgb32, true, fileIndex, QString(), 0, -1.0);
 }
 
 void PanoramaCache::pushBwFrame(const QImage &frameBwIndexed8, quint64 fileIndex)
 {
-    pushFrameInternal(m_bw, frameBwIndexed8, false, fileIndex, QString(), 0);
+    pushFrameInternal(m_bw, frameBwIndexed8, false, fileIndex, QString(), 0, -1.0);
 }
 
 void PanoramaCache::pushRgbFrame(const QImage &frameRgb32, quint64 fileIndex, const QString &sourcePath, qint64 rxMs)
 {
-    pushFrameInternal(m_rgb, frameRgb32, true, fileIndex, sourcePath, rxMs);
+    pushFrameInternal(m_rgb, frameRgb32, true, fileIndex, sourcePath, rxMs, -1.0);
 }
 
 void PanoramaCache::pushBwFrame(const QImage &frameBwIndexed8, quint64 fileIndex, const QString &sourcePath, qint64 rxMs)
 {
-    pushFrameInternal(m_bw, frameBwIndexed8, false, fileIndex, sourcePath, rxMs);
+    pushFrameInternal(m_bw, frameBwIndexed8, false, fileIndex, sourcePath, rxMs, -1.0);
+}
+
+void PanoramaCache::pushRgbFrame(const QImage &frameRgb32, quint64 fileIndex, const QString &sourcePath, qint64 rxMs, double angleDeg)
+{
+    pushFrameInternal(m_rgb, frameRgb32, true, fileIndex, sourcePath, rxMs, angleDeg);
+}
+
+void PanoramaCache::pushBwFrame(const QImage &frameBwIndexed8, quint64 fileIndex, const QString &sourcePath, qint64 rxMs, double angleDeg)
+{
+    pushFrameInternal(m_bw, frameBwIndexed8, false, fileIndex, sourcePath, rxMs, angleDeg);
 }
 
 QImage PanoramaCache::snapshotThumbRgb() const
@@ -269,7 +279,7 @@ double PanoramaCache::normalize360(double a)
     return a;
 }
 
-void PanoramaCache::pushFrameInternal(PanoramaCache::Stream &s, const QImage &frame, bool isRgb, quint64 fileIndex, const QString &sourcePath, qint64 rxMs)
+void PanoramaCache::pushFrameInternal(PanoramaCache::Stream &s, const QImage &frame, bool isRgb, quint64 fileIndex, const QString &sourcePath, qint64 rxMs, double angleDeg)
 {
     if (frame.isNull() || frame.width() <= 0) return;
 
@@ -295,7 +305,13 @@ void PanoramaCache::pushFrameInternal(PanoramaCache::Stream &s, const QImage &fr
         QReadLocker rl(&s.lock);
         if (!s.inited || s.sliceWFull <= 0 || s.segments <= 0) return;
         segments = s.segments;
-        tileIndex = (fileIndex > 0 && segments > 0) ? (int)(fileIndex % (quint64)segments) : s.writeIndex;
+        if (angleDeg >= 0.0 && segments > 0) {
+            const double a = normalize360(angleDeg);
+            tileIndex = (int)(a / 360.0 * segments) % segments;
+            if (tileIndex < 0) tileIndex = 0;
+        } else {
+            tileIndex = (fileIndex > 0 && segments > 0) ? (int)(fileIndex % (quint64)segments) : s.writeIndex;
+        }
         if (!isRgb && segments > 0) tileIndex = (tileIndex + segments / 2) % segments;
         sliceWFull = s.sliceWFull;
         sliceWThumb = s.sliceWThumb;

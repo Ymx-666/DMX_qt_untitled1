@@ -339,8 +339,10 @@ MainWindow::MainWindow(QWidget *parent) :
     radarView = new RadarWidget(this);
     radarFeedbackView = new AIVideoWidget(this);
 
-    panoramaView->setFixedHeight(150);
-    thermalPanoramaView->setFixedHeight(150);
+    panoramaView->setFixedHeight(80);
+    thermalPanoramaView->setFixedHeight(100);
+    panoramaView->setShowRuler(false);
+    thermalPanoramaView->setShowRuler(true);
 
     m_angleLabel = new QLabel("0.00°", radarView);
     m_angleLabel->setAlignment(Qt::AlignRight | Qt::AlignTop);
@@ -373,6 +375,10 @@ MainWindow::MainWindow(QWidget *parent) :
     bottomLayout->addWidget(radarView);
     bottomLayout->addWidget(radarFeedbackView);
     layout->addLayout(bottomLayout, 2, 0, 1, 2);
+
+    layout->setRowStretch(0, 0);
+    layout->setRowStretch(1, 4);
+    layout->setRowStretch(2, 2);
 
     connect(colorRoiView, &AIVideoWidget::clickedAt, this, [=](QPoint) {
         addLog(QStringLiteral("ROI"), QStringLiteral("RGB ROI click (hasImg=%1 size=%2x%3)")
@@ -1027,7 +1033,7 @@ void MainWindow::drainRender()
 void MainWindow::onPathReceived(const QString &type, const QString &path, const QString &sender, qint64 rxMs)
 {
     const QString t = type.trimmed().toUpper();
-    const double angleDeg = m_latestAngle;
+    const double angleDeg = m_zeroAngleInited ? m_latestAngle : -1.0;
     if (t == "RGB") {
         if (m_colorThread) m_colorThread->enqueuePath(t, path, sender, angleDeg, rxMs);
         return;

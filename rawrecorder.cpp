@@ -50,8 +50,13 @@ void RawRecorder::stopRecording()
 {
     QMutexLocker lk(&m_mtx);
     m_enabled = false;
+    const int leftCount = m_jobs.size();
+    qint64 leftBytes = 0;
+    for (const Job &j : m_jobs) leftBytes += j.bytes.size();
     if (m_indexFile.isOpen()) m_indexFile.close();
-    emit logRequested(QStringLiteral("REC"), QStringLiteral("Stop"), QStringLiteral("#569CD6"));
+    emit logRequested(QStringLiteral("REC"),
+        QStringLiteral("Stop (dropped queue: %1 jobs, %2 KB)").arg(leftCount).arg(leftBytes / 1024),
+        QStringLiteral("#569CD6"));
 }
 
 void RawRecorder::enqueueFrame(const QString &stream, quint64 fileIdx, qint64 rxMs, const QString &srcPath, const QString &sender, const QString &ext, const QByteArray &bytes)

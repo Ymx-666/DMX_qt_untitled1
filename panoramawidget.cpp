@@ -2,11 +2,20 @@
 #include <QPainter>
 #include <QMouseEvent>
 
+static int rulerH(bool show) { return show ? 16 : 0; }
+
 PanoramaWidget::PanoramaWidget(QWidget *parent) : QWidget(parent)
 {
-    setMinimumHeight(250);
+    setMinimumHeight(80);
     m_selectedAngle = -1.0;
     m_roiPixelWidth = 100;
+}
+
+void PanoramaWidget::setShowRuler(bool show)
+{
+    if (m_showRuler == show) return;
+    m_showRuler = show;
+    update();
 }
 
 void PanoramaWidget::updateImage(const QImage &img)
@@ -28,7 +37,7 @@ void PanoramaWidget::updateImagePartial(const QImage &img, const QRect &dirtyInI
         update();
         return;
     }
-    const int rulerHeight = 30;
+    const int rulerHeight = rulerH(m_showRuler);
     const QRect imageRect(0, 0, width(), height() - rulerHeight);
     const qint64 iw = m_image.width();
     const qint64 ih = m_image.height();
@@ -73,7 +82,7 @@ void PanoramaWidget::paintEvent(QPaintEvent *event)
 
     painter.fillRect(rect(), Qt::black);
 
-    int rulerHeight = 30;
+    const int rulerHeight = rulerH(m_showRuler);
     QRect imageRect(0, 0, width(), height() - rulerHeight);
 
     if (!m_image.isNull()) {
@@ -90,25 +99,31 @@ void PanoramaWidget::paintEvent(QPaintEvent *event)
         painter.drawRect(leftX, 0, m_roiPixelWidth, imageRect.height());
     }
 
-    painter.setPen(Qt::white);
-    painter.drawLine(0, height() - rulerHeight, width(), height() - rulerHeight); // 横轴线
+    if (!m_showRuler) return;
 
-    int step = 45; // 大刻度间隔 (度)
-    int smallStep = 15; // 小刻度
+    QFont rulerFont = painter.font();
+    rulerFont.setPointSize(7);
+    painter.setFont(rulerFont);
+
+    painter.setPen(QColor(180, 180, 180));
+    painter.drawLine(0, height() - rulerHeight, width(), height() - rulerHeight);
+
+    const int step = 45;
+    const int smallStep = 15;
 
     for (int deg = 0; deg <= 360; deg += smallStep) {
-        double r = deg / 360.0;
-        int x = (int)(r * width());
+        const double r = deg / 360.0;
+        const int x = (int)(r * width());
 
-        int lineBottom = height();
-        int lineTop = height() - 5; // 小刻度长度
+        const int lineBottom = height();
+        int lineTop = height() - 3;
 
         if (deg % step == 0) {
-            lineTop = height() - 10;
-            QString text = QString::number(deg);
-            int textWidth = painter.fontMetrics().width(text);
+            lineTop = height() - 7;
             if (deg < 360) {
-                 painter.drawText(x - textWidth/2, height() - 12, text);
+                const QString text = QString::number(deg);
+                const int textWidth = painter.fontMetrics().width(text);
+                painter.drawText(x - textWidth / 2, height() - 8, text);
             }
         }
 
