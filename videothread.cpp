@@ -342,6 +342,8 @@ VideoWorker::~VideoWorker()
 void VideoWorker::start()
 {
     m_running = true;
+    m_dropStaleForUi = (qgetenv("DMX_UI_NODROP") != "1");
+    m_lastRecordedIdx = 0;
     m_emitTimer.start();
     m_lastTextEmitMs = 0;
     m_lastStatMs = 0;
@@ -445,6 +447,7 @@ void VideoWorker::processOnePathJob()
 
     PathJob job;
     bool hasJob = false;
+    QVector<PathJob> droppedJobs;
     {
         QMutexLocker lk(&m_jobsMtx);
         if (m_hasCurrentJob) {
@@ -452,11 +455,23 @@ void VideoWorker::processOnePathJob()
             m_hasCurrentJob = false;
             hasJob = true;
         } else if (!m_jobs.isEmpty()) {
+            // Frame-drop valve: if the decode worker has fallen behind the device
+            // send rate, collapse the backlog and keep only the newest frame for
+            // the UI/decode path. The stale skipped frames are handed to the
+            // record-only path below (raw recording stays complete).
+            if (m_dropStaleForUi && m_jobs.size() > m_uiQueueCap) {
+                while (m_jobs.size() > 1) droppedJobs.push_back(m_jobs.dequeue());
+            }
             job = m_jobs.dequeue();
             hasJob = true;
         }
     }
     if (!hasJob) return;
+
+    for (int i = 0; i < droppedJobs.size(); ++i) {
+        ++m_totalDroppedPackets;     // shows up as drop=N in the RX stat line
+        recordRawOnly(droppedJobs[i]); // no-op unless recording is enabled
+    }
 
     int retryMs = 0;
     const bool done = handlePathInternal(job, &retryMs);
@@ -789,6 +804,53 @@ void VideoWorker::setRecordingEnabled(bool enabled)
     m_recordingEnabled = enabled;
 }
 
+// Parse the trailing decimal run of a filename's base as the device frame index,
+// e.g. "BW_20260528_210326_53496" -> 53496. Shared by the decode path and the
+// record-only drop path.
+static bool parseTrailingIndexStatic(const QString &path, quint64 *out)
+{
+    const QString base = QFileInfo(path).completeBaseName();
+    int i = base.size() - 1;
+    while (i >= 0 && base[i].isDigit()) --i;
+    const QString digits = base.mid(i + 1);
+    if (digits.isEmpty()) return false;
+    bool ok = false;
+    const quint64 v = digits.toULongLong(&ok);
+    if (!ok) return false;
+    if (out) *out = v;
+    return true;
+}
+
+void VideoWorker::recordRawOnly(VideoWorker::PathJob &job)
+{
+    // Persist the raw bytes of a frame we are dropping from the UI/decode path so
+    // raw recording stays complete. No decode / rotate / panorama push.
+    if (!m_recordingEnabled || m_recorder.isNull()) return;
+    const QString t = job.type.trimmed().toUpper();
+    const QString p = job.path.trimmed();
+    if (t.isEmpty() || p.isEmpty()) return;
+    const QString senderIp = extractSenderIp(job.sender);
+    const QString winPath = mapDevicePathToWindowsShare(p, senderIp);
+    QFileInfo fi(winPath);
+    if (!fi.exists() || !fi.isFile() || fi.size() <= 0) return; // dropped frames are old -> ready
+    quint64 fileIdx = 0;
+    parseTrailingIndexStatic(winPath, &fileIdx);
+    if (fileIdx != 0 && fileIdx == m_lastRecordedIdx) return; // dedup exact resend
+    QFile f(winPath);
+    if (!f.open(QIODevice::ReadOnly)) return;
+    const QByteArray bytes = f.readAll();
+    f.close();
+    if (bytes.isEmpty()) return;
+    const QString subType = (t == "GRAY") ? QStringLiteral("BW") : t;
+    const QString ext = fi.suffix().trimmed().toLower();
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    QMetaObject::invokeMethod(
+        m_recorder.data(), "enqueueFrame", Qt::QueuedConnection,
+        Q_ARG(QString, subType), Q_ARG(quint64, fileIdx), Q_ARG(qint64, nowMs),
+        Q_ARG(QString, winPath), Q_ARG(QString, job.sender), Q_ARG(QString, ext), Q_ARG(QByteArray, bytes));
+    if (fileIdx != 0) m_lastRecordedIdx = fileIdx;
+}
+
 bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
 {
     if (retryMs) *retryMs = 0;
@@ -821,20 +883,8 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
     const QString senderIp = extractSenderIp(job.sender);
     const QString winPath0 = mapDevicePathToWindowsShare(p, senderIp);
 
-    auto parseTrailingIndex = [&](const QString &path, quint64 *out)->bool {
-        const QString base = QFileInfo(path).completeBaseName();
-        int i = base.size() - 1;
-        while (i >= 0 && base[i].isDigit()) --i;
-        const QString digits = base.mid(i + 1);
-        if (digits.isEmpty()) return false;
-        bool ok = false;
-        const quint64 v = digits.toULongLong(&ok);
-        if (!ok) return false;
-        if (out) *out = v;
-        return true;
-    };
     quint64 fileIdx = 0;
-    const bool hasIdx = parseTrailingIndex(winPath0, &fileIdx);
+    const bool hasIdx = parseTrailingIndexStatic(winPath0, &fileIdx);
     // Count rx packets and seq dup/gap exactly ONCE per frame. handlePathInternal
     // is re-entered on every file-not-ready/decode retry; counting here (gated by
     // seqCounted) keeps the RX/SEQ stats honest instead of inflating them by the

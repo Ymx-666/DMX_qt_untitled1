@@ -50,6 +50,7 @@ private slots:
 private:
     struct PathJob;
     bool handlePathInternal(PathJob &job, int *retryMs);
+    void recordRawOnly(PathJob &job);
     void noteReadFail(const QString &subType, const QString &detail, const QString &senderIp, qint64 nowMs);
     void updateSeqState(const QString &subType, quint64 fileIdx, const QString &winPath, qint64 nowMs);
     void schedulePathJobs(int delayMs);
@@ -122,6 +123,15 @@ private:
     bool m_hasCurrentJob = false;
     QAtomicInteger<int> m_jobsScheduled = 0;
     QTimer *m_jobsTimer = nullptr;
+
+    // UI frame-drop valve: when the decode worker falls behind the device send
+    // rate, the render/panorama path keeps only the newest frame and drops the
+    // stale backlog so the UI stays live. Dropped frames are NOT lost from raw
+    // recording: when recording is on, their raw bytes are still persisted
+    // (recordRawOnly) before being skipped for decode. Disable via DMX_UI_NODROP=1.
+    bool m_dropStaleForUi = true;
+    int m_uiQueueCap = 2;
+    quint64 m_lastRecordedIdx = 0;
 
     QSharedPointer<PanoramaCache> m_cache;
     QPointer<QObject> m_recorder;
