@@ -795,7 +795,6 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
     if (!m_running) return true;
     QElapsedTimer handleTimer;
     handleTimer.start();
-    ++m_totalRxPackets;
     m_lastSender = job.sender;
 
     const QString t = job.type.trimmed().toUpper();
@@ -836,14 +835,25 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
     };
     quint64 fileIdx = 0;
     const bool hasIdx = parseTrailingIndex(winPath0, &fileIdx);
-    if (hasIdx) {
-        const QString subType = (t == "GRAY") ? "BW" : t;
-        updateSeqState(subType, fileIdx, winPath0, nowMs);
+    // Count rx packets and seq dup/gap exactly ONCE per frame. handlePathInternal
+    // is re-entered on every file-not-ready/decode retry; counting here (gated by
+    // seqCounted) keeps the RX/SEQ stats honest instead of inflating them by the
+    // number of retries.
+    if (!job.seqCounted) {
+        job.seqCounted = true;
+        ++m_totalRxPackets;
+        if (hasIdx) {
+            const QString subType = (t == "GRAY") ? "BW" : t;
+            updateSeqState(subType, fileIdx, winPath0, nowMs);
+        }
     }
     const quint64 cacheFileIdx = hasIdx ? fileIdx : 0;
 
     QString decErr;
-    const bool preferGray = (m_type == 1);
+    // BW is a fake-gray RGB JPEG. Do NOT spend a 16M-pixel pass converting it to
+    // true Indexed8 gray; treat it exactly like RGB (keep RGB32). This removes the
+    // BW decode bottleneck (the toIndexed8Gray pass) so BW keeps up like RGB.
+    const bool preferGray = false;
     QString usedPath = winPath0;
     const QFileInfo fi(usedPath);
     const bool exists = fi.exists() && fi.isFile();
@@ -949,9 +959,9 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
 
     if (m_type == 1) {
         QImage bwFull = loaded;
-        if (bwFull.isNull() || bwFull.format() != QImage::Format_Indexed8) {
+        if (bwFull.isNull() || bwFull.format() != QImage::Format_RGB32) {
             ++m_totalReadFails;
-            noteReadFail(QStringLiteral("BW"), QStringLiteral("toGray failed: %1").arg(usedPath), senderIp, nowMs);
+            noteReadFail(QStringLiteral("BW"), QStringLiteral("toRGB failed: %1").arg(usedPath), senderIp, nowMs);
             return true;
         }
         bwFull = rotateCCW90(bwFull, true);

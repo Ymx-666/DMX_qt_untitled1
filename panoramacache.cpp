@@ -346,9 +346,10 @@ void PanoramaCache::pushFrameInternal(PanoramaCache::Stream &s, const QImage &fr
 
     const int startXThumb = tileIndex * sliceWThumb;
 
+    // Both streams are stored as RGB32 now (BW is fake-gray RGB, no Indexed8
+    // conversion). isRgb only selects the angular tile offset above, not format.
     QImage thumbSlice = frame.scaled(sliceWThumb, thumbH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-    if (isRgb) thumbSlice = ensureRgb32(thumbSlice);
-    else thumbSlice = ensureBw8(thumbSlice);
+    thumbSlice = ensureRgb32(thumbSlice);
     if (thumbSlice.isNull()) return;
 
     // overlap 必须为 0：原本的 alpha 混合会把每个 tile 左缘与"旧内容"（初始为黑）
@@ -358,8 +359,7 @@ void PanoramaCache::pushFrameInternal(PanoramaCache::Stream &s, const QImage &fr
     QImage fullSlice;
     if (writeFull) {
         fullSlice = frame.scaled(sliceWFull, fullH, Qt::IgnoreAspectRatio, Qt::FastTransformation);
-        if (isRgb) fullSlice = ensureRgb32(fullSlice);
-        else fullSlice = ensureBw8(fullSlice);
+        fullSlice = ensureRgb32(fullSlice);
         if (fullSlice.isNull()) writeFull = false;
     }
 
@@ -367,13 +367,8 @@ void PanoramaCache::pushFrameInternal(PanoramaCache::Stream &s, const QImage &fr
         QReadLocker rl(&s.lock);
         if (!s.inited || s.thumb.isNull()) return;
         if (segLock) segLock->lockForWrite();
-        if (isRgb) {
-            if (writeFull) writeSliceRgb32(s.full, fullSlice, tileIndex * sliceWFull, overlapFull);
-            writeSliceRgb32(s.thumb, thumbSlice, startXThumb, overlapThumb);
-        } else {
-            if (writeFull) writeSliceBw8(s.full, fullSlice, tileIndex * sliceWFull, overlapFull);
-            writeSliceBw8(s.thumb, thumbSlice, startXThumb, overlapThumb);
-        }
+        if (writeFull) writeSliceRgb32(s.full, fullSlice, tileIndex * sliceWFull, overlapFull);
+        writeSliceRgb32(s.thumb, thumbSlice, startXThumb, overlapThumb);
         if (segLock) segLock->unlock();
     }
 
@@ -790,25 +785,14 @@ void PanoramaCache::reinitStream(PanoramaCache::Stream &s, int frameW, bool isRg
     const int sliceWFull = qMax(1, fullW / segments);
     const int sliceWThumb = qMax(1, thumbW / segments);
 
-    QImage full;
-    QImage thumb;
-    if (isRgb) {
-        thumb = QImage(thumbW, thumbH, QImage::Format_RGB32);
-        if (!thumb.isNull()) thumb.fill(Qt::black);
-        full = QImage(fullW, fullH, QImage::Format_RGB32);
-        if (!full.isNull()) full.fill(Qt::black);
-    } else {
-        thumb = QImage(thumbW, thumbH, QImage::Format_Indexed8);
-        if (!thumb.isNull()) {
-            thumb.setColorTable(grayColorTableLocal());
-            thumb.fill(0);
-        }
-        full = QImage(fullW, fullH, QImage::Format_Indexed8);
-        if (!full.isNull()) {
-            full.setColorTable(grayColorTableLocal());
-            full.fill(0);
-        }
-    }
+    // Both RGB and BW streams are stored as RGB32. BW is a fake-gray RGB source,
+    // so storing it as Indexed8 only bought memory at the cost of a costly
+    // per-frame RGB32->Indexed8 conversion that made BW fall behind.
+    Q_UNUSED(isRgb);
+    QImage thumb(thumbW, thumbH, QImage::Format_RGB32);
+    if (!thumb.isNull()) thumb.fill(Qt::black);
+    QImage full(fullW, fullH, QImage::Format_RGB32);
+    if (!full.isNull()) full.fill(Qt::black);
 
     if (thumb.isNull()) {
         s.inited = false;

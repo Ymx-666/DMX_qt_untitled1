@@ -126,19 +126,15 @@ void PanoramaSaver::process()
     }
     rgbCombined.fill(Qt::black);
 
-    QImage bwCombined(saveW, saveH, QImage::Format_Indexed8);
+    // BW is stored as RGB32 (fake-gray RGB, see PanoramaCache). Compose it the
+    // same way as RGB instead of as an 8-bit indexed image.
+    QImage bwCombined(saveW, saveH, QImage::Format_RGB32);
     if (bwCombined.isNull()) {
         emit saveFinished(job.id, false, QStringLiteral("BW allocate failed (out of memory)"), job.outDir);
         schedule();
         return;
     }
-    {
-        QVector<QRgb> palette;
-        palette.reserve(256);
-        for (int i = 0; i < 256; ++i) palette.append(qRgb(i, i, i));
-        bwCombined.setColorTable(palette);
-    }
-    bwCombined.fill(0);
+    bwCombined.fill(Qt::black);
 
     const QByteArray env = qgetenv("PANO_SAVE_RAW");
     const bool saveRawBytes = (!env.isEmpty() && env != "0");
@@ -190,9 +186,9 @@ void PanoramaSaver::process()
             return;
         }
         for (int y = 0; y < saveH; ++y) {
-            const uchar *src = bwTile.constScanLine(y);
-            uchar *dst = bwCombined.scanLine(y) + startX;
-            memcpy(dst, src, (size_t)copyW);
+            const QRgb *src = reinterpret_cast<const QRgb*>(bwTile.constScanLine(y));
+            QRgb *dst = reinterpret_cast<QRgb*>(bwCombined.scanLine(y)) + startX;
+            memcpy(dst, src, (size_t)copyW * 4);
         }
 
         if (saveRawBytes && tile < rgbPaths.size() && !rgbPaths[tile].isEmpty()) {

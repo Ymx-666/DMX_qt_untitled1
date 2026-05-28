@@ -114,6 +114,7 @@ private:
         qint64 firstSeenMs = 0;
         qint64 lastSize = -1;
         int tries = 0;
+        bool seqCounted = false; // count rx/seq once per frame, not per retry
     };
     QMutex m_jobsMtx;
     QQueue<PathJob> m_jobs;

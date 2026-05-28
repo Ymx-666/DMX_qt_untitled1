@@ -367,12 +367,8 @@ MainWindow::MainWindow(QWidget *parent) :
     {
         QImage rgb(8192, 240, QImage::Format_RGB32);
         rgb.fill(Qt::black);
-        QImage bw(8192, 240, QImage::Format_Indexed8);
-        QVector<QRgb> table;
-        table.reserve(256);
-        for (int i = 0; i < 256; ++i) table.push_back(qRgb(i, i, i));
-        bw.setColorTable(table);
-        bw.fill(0);
+        QImage bw(8192, 240, QImage::Format_RGB32);
+        bw.fill(Qt::black);
         m_uiThumbRgb = rgb;
         m_uiThumbBw = bw;
     }
@@ -1002,12 +998,8 @@ void MainWindow::onClearUiClicked()
     {
         QImage rgb(8192, 240, QImage::Format_RGB32);
         rgb.fill(Qt::black);
-        QImage bw(8192, 240, QImage::Format_Indexed8);
-        QVector<QRgb> table;
-        table.reserve(256);
-        for (int i = 0; i < 256; ++i) table.push_back(qRgb(i, i, i));
-        bw.setColorTable(table);
-        bw.fill(0);
+        QImage bw(8192, 240, QImage::Format_RGB32);
+        bw.fill(Qt::black);
         m_uiThumbRgb = rgb;
         m_uiThumbBw = bw;
         panoramaView->updateImage(m_uiThumbRgb);
@@ -1021,8 +1013,10 @@ void MainWindow::onClearUiClicked()
     captureView->updateImage(blackImg);
     radarFeedbackView->updateImage(blackImg);
 
-    m_zeroAngleInited = false;
-    m_zeroAngleRaw = 0.0;
+    // NOTE: intentionally do NOT reset the zero-angle reference here. Resetting it
+    // would re-anchor 0deg to wherever the turntable happens to be at clear time,
+    // shifting all panorama content (same object lands at a different position
+    // after a clear). Keep the original zero so placement stays stable.
     m_lastColorRoi = QImage();
     m_lastThermalRoi = QImage();
     if(m_logBrowser) m_logBrowser->clear();
