@@ -263,6 +263,24 @@ void PanoramaSaver::process()
     const qint64 bwBytes = QFileInfo(bwPath).size();
     const qint64 bwEncMs = QDateTime::currentMSecsSinceEpoch() - bwEncStart;
 
+    // 额外保存降采样预览图：原图 65500 宽超出绝大多数看图器上限，
+    // 这里缩到 <=8192 宽，任何看图器都能秒开。全分辨率原图保留供算法使用。
+    const int previewW = qMin(saveW, 8192);
+    const int previewH = (saveW > 0) ? (int)((qint64)saveH * previewW / saveW) : saveH;
+    qint64 rgbPreviewBytes = 0;
+    qint64 bwPreviewBytes = 0;
+    if (previewW > 0 && previewH > 0 && previewW < saveW) {
+        QImage rgbPreview = rgbCombined.scaled(previewW, previewH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        const QString rgbPreviewPath = QDir(job.outDir).filePath(QStringLiteral("rgb_preview.jpg"));
+        if (writeImageFile(rgbPreviewPath, rgbPreview, "jpg", 88, &err))
+            rgbPreviewBytes = QFileInfo(rgbPreviewPath).size();
+
+        QImage bwPreview = bwCombined.scaled(previewW, previewH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        const QString bwPreviewPath = QDir(job.outDir).filePath(QStringLiteral("bw_preview.jpg"));
+        if (writeImageFile(bwPreviewPath, bwPreview, "jpg", 88, &err))
+            bwPreviewBytes = QFileInfo(bwPreviewPath).size();
+    }
+
     QJsonObject root;
     root.insert(QStringLiteral("saveId"), (qint64)job.id);
     root.insert(QStringLiteral("createdMs"), (qint64)QDateTime::currentMSecsSinceEpoch());
@@ -271,20 +289,26 @@ void PanoramaSaver::process()
     root.insert(QStringLiteral("originalPanoW"), rgbFull.panoW);
     root.insert(QStringLiteral("croppedColumns"), rgbFull.panoW - saveW);
     root.insert(QStringLiteral("composeMs"), composeMs);
+    root.insert(QStringLiteral("previewW"), previewW);
+    root.insert(QStringLiteral("previewH"), previewH);
 
     QJsonObject rgbObj;
     rgbObj.insert(QStringLiteral("file"), QStringLiteral("rgb.jpg"));
+    rgbObj.insert(QStringLiteral("preview"), QStringLiteral("rgb_preview.jpg"));
     rgbObj.insert(QStringLiteral("format"), QStringLiteral("jpg"));
     rgbObj.insert(QStringLiteral("quality"), job.rgbJpegQuality);
     rgbObj.insert(QStringLiteral("bytes"), rgbBytes);
+    rgbObj.insert(QStringLiteral("previewBytes"), rgbPreviewBytes);
     rgbObj.insert(QStringLiteral("encodeMs"), rgbEncMs);
     root.insert(QStringLiteral("rgb"), rgbObj);
 
     QJsonObject bwObj;
     bwObj.insert(QStringLiteral("file"), QStringLiteral("bw.jpg"));
+    bwObj.insert(QStringLiteral("preview"), QStringLiteral("bw_preview.jpg"));
     bwObj.insert(QStringLiteral("format"), QStringLiteral("jpg"));
     bwObj.insert(QStringLiteral("quality"), job.rgbJpegQuality);
     bwObj.insert(QStringLiteral("bytes"), bwBytes);
+    bwObj.insert(QStringLiteral("previewBytes"), bwPreviewBytes);
     bwObj.insert(QStringLiteral("encodeMs"), bwEncMs);
     root.insert(QStringLiteral("bw"), bwObj);
 
