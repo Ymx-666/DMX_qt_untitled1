@@ -3,6 +3,7 @@
 #include <QtMath>
 #include <QFile>
 #include <QDataStream>
+#include <algorithm>
 
 static QVector<QRgb> grayColorTableLocal()
 {
@@ -188,6 +189,26 @@ QImage PanoramaCache::extractThumbRgbSliceByAngle(double angleDeg) const
 QImage PanoramaCache::extractThumbBwSliceByAngle(double angleDeg, bool allow180Fallback) const
 {
     return extractThumbSliceInternal(m_bw, angleDeg, allow180Fallback);
+}
+
+QImage PanoramaCache::extractFullRgbWindow(double centerAngleDeg, int windowW) const
+{
+    return extractWindowInternal(m_rgb, true, centerAngleDeg, windowW);
+}
+
+QImage PanoramaCache::extractFullBwWindow(double centerAngleDeg, int windowW) const
+{
+    return extractWindowInternal(m_bw, true, centerAngleDeg, windowW);
+}
+
+QImage PanoramaCache::extractThumbRgbWindow(double centerAngleDeg, int windowW) const
+{
+    return extractWindowInternal(m_rgb, false, centerAngleDeg, windowW);
+}
+
+QImage PanoramaCache::extractThumbBwWindow(double centerAngleDeg, int windowW) const
+{
+    return extractWindowInternal(m_bw, false, centerAngleDeg, windowW);
 }
 
 bool PanoramaCache::copyFullRgbTile(int tileIndex, QImage &out) const
@@ -537,6 +558,92 @@ QImage PanoramaCache::extractThumbSliceInternal(const PanoramaCache::Stream &s, 
     QImage roi2 = extractByTile(tileB);
     if (roi2.format() == QImage::Format_Indexed8) return roi2.convertToFormat(QImage::Format_RGB32);
     return roi2;
+}
+
+QImage PanoramaCache::extractWindowInternal(const PanoramaCache::Stream &s, bool full, double centerAngleDeg, int windowW) const
+{
+    int segments = 0;
+    int sliceW = 0;
+    int coverW = 0;
+    int panoH = 0;
+    QImage::Format fmt = QImage::Format_Invalid;
+    {
+        QReadLocker l(&s.lock);
+        if (full) {
+            if (!s.inited || !s.fullReady || s.full.isNull() || s.sliceWFull <= 0 || s.segments <= 0 || s.segLocks.size() != s.segments) return QImage();
+            sliceW = s.sliceWFull;
+            panoH = s.full.height();
+            fmt = s.full.format();
+        } else {
+            if (!s.inited || s.thumb.isNull() || s.sliceWThumb <= 0 || s.segments <= 0 || s.segLocks.size() != s.segments) return QImage();
+            sliceW = s.sliceWThumb;
+            panoH = s.thumb.height();
+            fmt = s.thumb.format();
+        }
+        segments = s.segments;
+        coverW = segments * sliceW;
+    }
+
+    if (coverW <= 0 || panoH <= 0 || sliceW <= 0) return QImage();
+    if (windowW <= 0) windowW = sliceW;
+    if (windowW > coverW) windowW = coverW;
+
+    const int bpp = (fmt == QImage::Format_Indexed8) ? 1 : 4;
+
+    // Map angle to pixel column inside the filled cylinder [0, coverW).
+    const double a = normalize360(centerAngleDeg);
+    int centerX = (int)(a / 360.0 * coverW);
+    if (centerX < 0) centerX = 0;
+    if (centerX >= coverW) centerX = coverW - 1;
+    int startX = centerX - windowW / 2;
+    startX %= coverW;
+    if (startX < 0) startX += coverW;
+
+    // Window may wrap around the 360 seam: split into [startX, startX+L1) and [0, L2).
+    const int L1 = qMin(windowW, coverW - startX);
+    const int L2 = windowW - L1;
+
+    QImage out(windowW, panoH, fmt);
+    if (out.isNull()) return QImage();
+    if (fmt == QImage::Format_Indexed8) out.setColorTable(grayColorTableLocal());
+
+    // Collect the tiles spanned by both segments, lock them ascending for read.
+    QVector<int> tiles;
+    auto addTiles = [&](int x0, int len) {
+        if (len <= 0) return;
+        const int t0 = x0 / sliceW;
+        const int t1 = (x0 + len - 1) / sliceW;
+        for (int t = t0; t <= t1 && t < segments; ++t)
+            if (!tiles.contains(t)) tiles.push_back(t);
+    };
+    addTiles(startX, L1);
+    if (L2 > 0) addTiles(0, L2);
+    std::sort(tiles.begin(), tiles.end());
+
+    QReadLocker sl(&s.lock);
+    const QImage &srcImg = full ? s.full : s.thumb;
+    if (srcImg.isNull()) return QImage();
+    // Guard against a concurrent reinit having shrunk the backing image between
+    // the metadata read above and this copy lock (avoids out-of-bounds reads).
+    if (srcImg.width() < coverW || srcImg.height() < panoH) return QImage();
+
+    for (int i = 0; i < tiles.size(); ++i) {
+        const int t = tiles[i];
+        QReadWriteLock *lk = (t >= 0 && t < s.segLocks.size()) ? s.segLocks[t].data() : nullptr;
+        if (lk) lk->lockForRead();
+    }
+    for (int y = 0; y < panoH; ++y) {
+        const uchar *srcLine = srcImg.constScanLine(y);
+        uchar *dstLine = out.scanLine(y);
+        memcpy(dstLine, srcLine + (qint64)startX * bpp, (qint64)L1 * bpp);
+        if (L2 > 0) memcpy(dstLine + (qint64)L1 * bpp, srcLine, (qint64)L2 * bpp);
+    }
+    for (int i = tiles.size() - 1; i >= 0; --i) {
+        const int t = tiles[i];
+        QReadWriteLock *lk = (t >= 0 && t < s.segLocks.size()) ? s.segLocks[t].data() : nullptr;
+        if (lk) lk->unlock();
+    }
+    return out;
 }
 
 PanoramaCache::ThumbInfo PanoramaCache::thumbInfoInternal(const PanoramaCache::Stream &s) const

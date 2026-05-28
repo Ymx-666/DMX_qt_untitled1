@@ -59,20 +59,46 @@ void PanoramaWidget::setSelectionBoxWidth(int width)
     m_roiPixelWidth = width;
 }
 
+double PanoramaWidget::angleFromX(int x) const
+{
+    const int w = width();
+    if (w <= 0) return 0.0;
+    double ratio = (double)x / (double)w;
+    if (ratio < 0.0) ratio = 0.0;
+    if (ratio > 1.0) ratio = 1.0;
+    double angle = ratio * 360.0;
+    if (angle < 0.0) angle = 0.0;
+    if (angle >= 360.0) angle = 359.9;
+    return angle;
+}
+
+void PanoramaWidget::selectAngleFromX(int x)
+{
+    if (m_image.isNull()) return;
+    m_selectedAngle = angleFromX(x);
+    update();
+    emit angleSelected(m_selectedAngle);
+}
+
 void PanoramaWidget::mousePressEvent(QMouseEvent *event)
 {
     if (m_image.isNull()) return;
+    if (event->button() != Qt::LeftButton) return;
+    m_dragging = true;
+    selectAngleFromX(event->x());
+}
 
-    double ratio = (double)event->x() / width();
-    double angle = ratio * 360.0;
+void PanoramaWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    if (!m_dragging) return;
+    if (!(event->buttons() & Qt::LeftButton)) return;
+    selectAngleFromX(event->x());
+}
 
-    if (angle < 0) angle = 0;
-    if (angle >= 360) angle = 359.9;
-
-    m_selectedAngle = angle;
-
-    update();
-    emit angleSelected(m_selectedAngle);
+void PanoramaWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton) return;
+    m_dragging = false;
 }
 
 void PanoramaWidget::paintEvent(QPaintEvent *event)

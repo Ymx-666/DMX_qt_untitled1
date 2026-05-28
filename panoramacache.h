@@ -59,6 +59,14 @@ public:
     QImage extractThumbRgbSliceByAngle(double angleDeg) const;
     QImage extractThumbBwSliceByAngle(double angleDeg, bool allow180Fallback) const;
 
+    // Sliding-window extraction: take a windowW-pixel-wide column window centered
+    // at centerAngleDeg, NOT aligned to tile boundaries, with 360 wraparound.
+    // windowW <= 0 means "one tile width" (sliceW) for that stream/resolution.
+    QImage extractFullRgbWindow(double centerAngleDeg, int windowW) const;
+    QImage extractFullBwWindow(double centerAngleDeg, int windowW) const;
+    QImage extractThumbRgbWindow(double centerAngleDeg, int windowW) const;
+    QImage extractThumbBwWindow(double centerAngleDeg, int windowW) const;
+
     bool copyFullRgbTile(int tileIndex, QImage &out) const;
     bool copyFullBwTile(int tileIndex, QImage &out) const;
     bool snapshotFullRgbTileSources(QVector<quint64> &fileIdx, QVector<QString> &paths, QVector<qint64> &rxMs) const;
@@ -118,6 +126,7 @@ private:
     QImage snapshotInternalThumb(const Stream &s) const;
     QImage extractSliceInternal(const Stream &s, double angleDeg, bool allow180Fallback) const;
     QImage extractThumbSliceInternal(const Stream &s, double angleDeg, bool allow180Fallback) const;
+    QImage extractWindowInternal(const Stream &s, bool full, double centerAngleDeg, int windowW) const;
     BlockState stateInternal(const Stream &s, bool full) const;
     ThumbInfo thumbInfoInternal(const Stream &s) const;
     QVector<int> takeDirtyThumbTilesInternal(Stream &s);

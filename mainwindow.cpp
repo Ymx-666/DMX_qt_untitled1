@@ -21,6 +21,9 @@
 #include <QDialog>
 #include <QScrollArea>
 #include <QKeyEvent>
+#include <QWheelEvent>
+#include <QScrollBar>
+#include <QSizeGrip>
 #include <QPixmap>
 #include <QStringList>
 #include <QMouseEvent>
@@ -91,15 +94,20 @@ public:
         : QDialog(parent)
     {
         setWindowTitle("ROI");
+        setSizeGripEnabled(true);
         resize(1000, 800);
         m_label = new QLabel();
         m_label->setBackgroundRole(QPalette::Base);
         m_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
         m_label->setScaledContents(false);
+        m_label->setAlignment(Qt::AlignCenter);
 
         m_scroll = new QScrollArea(this);
         m_scroll->setWidget(m_label);
-        m_scroll->setWidgetResizable(true);
+        // Keep the label at the pixmap's natural size so the scroll area can
+        // scroll a zoomed image (magnifier), instead of stretching to fit.
+        m_scroll->setWidgetResizable(false);
+        m_scroll->setAlignment(Qt::AlignCenter);
 
         QVBoxLayout *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -111,7 +119,18 @@ public:
     {
         if (img.isNull() || !m_label) return;
         m_label->setPixmap(QPixmap::fromImage(img));
-        m_label->adjustSize();
+        m_label->resize(img.size());
+
+        // Mouse-centered zoom: after the re-scaled image arrives, scroll so the
+        // pixel that was under the cursor stays under the cursor.
+        if (m_anchorFx >= 0.0 && m_scroll) {
+            const int newX = (int)(m_anchorFx * img.width()) - m_anchorViewportPos.x();
+            const int newY = (int)(m_anchorFy * img.height()) - m_anchorViewportPos.y();
+            if (m_scroll->horizontalScrollBar()) m_scroll->horizontalScrollBar()->setValue(newX);
+            if (m_scroll->verticalScrollBar()) m_scroll->verticalScrollBar()->setValue(newY);
+            m_anchorFx = -1.0;
+            m_anchorFy = -1.0;
+        }
     }
 
 protected:
@@ -139,6 +158,31 @@ protected:
         QDialog::keyPressEvent(event);
     }
 
+    void wheelEvent(QWheelEvent *event) override
+    {
+        if (!event || !m_scroll || !m_label) { QDialog::wheelEvent(event); return; }
+        const int dy = event->angleDelta().y();
+        if (dy == 0) { QDialog::wheelEvent(event); return; }
+
+        // Record the image-space fraction under the cursor before zooming, so we
+        // can scroll back to it once the re-scaled image arrives (see setImage).
+        const QPoint vpPos = m_scroll->viewport()->mapFromGlobal(event->globalPos());
+        const int hVal = m_scroll->horizontalScrollBar() ? m_scroll->horizontalScrollBar()->value() : 0;
+        const int vVal = m_scroll->verticalScrollBar() ? m_scroll->verticalScrollBar()->value() : 0;
+        const int lw = m_label->width();
+        const int lh = m_label->height();
+        if (lw > 0 && lh > 0) {
+            m_anchorFx = (double)(hVal + vpPos.x()) / (double)lw;
+            m_anchorFy = (double)(vVal + vpPos.y()) / (double)lh;
+            m_anchorViewportPos = vpPos;
+        }
+
+        m_scale *= (dy > 0) ? 1.25 : (1.0 / 1.25);
+        if (m_scale < 0.05) m_scale = 0.05;
+        if (m_onScale) m_onScale(m_scale);
+        event->accept();
+    }
+
 private:
     friend class MainWindow;
     void setScaleCallback(std::function<void(double)> cb) { m_onScale = std::move(cb); }
@@ -147,6 +191,9 @@ private:
     QLabel *m_label = nullptr;
     double m_scale = 1.0;
     std::function<void(double)> m_onScale;
+    double m_anchorFx = -1.0;
+    double m_anchorFy = -1.0;
+    QPoint m_anchorViewportPos;
 };
 
 RoiWorker::RoiWorker(QSharedPointer<PanoramaCache> cache, QObject *parent)
@@ -224,20 +271,17 @@ void RoiWorker::process()
     if (!m_cache) return;
 
     if (doPreview) {
-        QImage rgb = m_cache->extractThumbRgbSliceByAngle(previewAngle);
-        if (rgb.isNull()) rgb = m_cache->extractThumbRgbSliceByAngle(previewAngle + 180.0);
-        QImage bw = m_cache->extractThumbBwSliceByAngle(previewAngle, true);
+        // Sliding-window ROI: take a one-tile-wide window centered on the angle
+        // (windowW=0 -> sliceW), pixel-accurate and not tile-aligned.
+        QImage rgb = m_cache->extractThumbRgbWindow(previewAngle, 0);
+        QImage bw = m_cache->extractThumbBwWindow(previewAngle, 0);
         if (!bw.isNull() && bw.format() == QImage::Format_Indexed8) bw = bw.convertToFormat(QImage::Format_RGB32);
         emit previewReady(previewAngle, rgb, bw);
     }
 
     if (doFullRgb) {
-        QImage rgb = m_cache->extractFullRgbSliceByAngle(fullRgbAngle);
-        if (rgb.isNull()) rgb = m_cache->extractFullRgbSliceByAngle(fullRgbAngle + 180.0);
-        if (rgb.isNull()) {
-            rgb = m_cache->extractThumbRgbSliceByAngle(fullRgbAngle);
-            if (rgb.isNull()) rgb = m_cache->extractThumbRgbSliceByAngle(fullRgbAngle + 180.0);
-        }
+        QImage rgb = m_cache->extractFullRgbWindow(fullRgbAngle, 0);
+        if (rgb.isNull()) rgb = m_cache->extractThumbRgbWindow(fullRgbAngle, 0);
         if (!rgb.isNull()) {
             const qint64 maxPixels = 40ll * 1024 * 1024;
             const int maxDim = 16384;
@@ -259,8 +303,8 @@ void RoiWorker::process()
     }
 
     if (doFullBw) {
-        QImage bw = m_cache->extractFullBwSliceByAngle(fullBwAngle, true);
-        if (bw.isNull()) bw = m_cache->extractThumbBwSliceByAngle(fullBwAngle, true);
+        QImage bw = m_cache->extractFullBwWindow(fullBwAngle, 0);
+        if (bw.isNull()) bw = m_cache->extractThumbBwWindow(fullBwAngle, 0);
         if (!bw.isNull() && bw.format() == QImage::Format_Indexed8) bw = bw.convertToFormat(QImage::Format_RGB32);
         if (!bw.isNull() && fullBwScale != 1.0) {
             const qint64 maxPixels = 40ll * 1024 * 1024;
@@ -444,9 +488,10 @@ MainWindow::MainWindow(QWidget *parent) :
             if (!p || !m_roiWorker) return;
             QMetaObject::invokeMethod(m_roiWorker, "requestFullRgbScaled", Qt::QueuedConnection, Q_ARG(double, angle), Q_ARG(double, s));
         });
-        connect(m_roiWorker, &RoiWorker::fullScaledReady, dlg, [=](bool isBw, double a, double, const QImage &img) {
+        connect(m_roiWorker, &RoiWorker::fullScaledReady, dlg, [=](bool isBw, double a, double actualScale, const QImage &img) {
             if (!p || isBw) return;
             if (qAbs(a - angle) > 0.001) return;
+            p->m_scale = actualScale;
             p->setImage(img);
         }, Qt::QueuedConnection);
         if (QApplication::desktop()) {
@@ -480,9 +525,10 @@ MainWindow::MainWindow(QWidget *parent) :
             if (!p || !m_roiWorker) return;
             QMetaObject::invokeMethod(m_roiWorker, "requestFullBwScaled", Qt::QueuedConnection, Q_ARG(double, angle), Q_ARG(double, s));
         });
-        connect(m_roiWorker, &RoiWorker::fullScaledReady, dlg, [=](bool isBw, double a, double, const QImage &img) {
+        connect(m_roiWorker, &RoiWorker::fullScaledReady, dlg, [=](bool isBw, double a, double actualScale, const QImage &img) {
             if (!p || !isBw) return;
             if (qAbs(a - angle) > 0.001) return;
+            p->m_scale = actualScale;
             p->setImage(img);
         }, Qt::QueuedConnection);
         if (QApplication::desktop()) {
