@@ -343,6 +343,15 @@ MainWindow::MainWindow(QWidget *parent) :
     m_isDeviceOpen = false;
     m_lastDetectMs = 0;
     m_lastLogMs = 0;
+    m_captureLatencyMs = qgetenv("DMX_CAPTURE_LATENCY_MS").toLongLong();
+    {
+        const QByteArray rgbLatency = qgetenv("DMX_CAPTURE_LATENCY_MS_RGB");
+        const QByteArray bwLatency = qgetenv("DMX_CAPTURE_LATENCY_MS_BW");
+        m_captureLatencyRgbMs = rgbLatency.isEmpty() ? m_captureLatencyMs : rgbLatency.toLongLong();
+        m_captureLatencyBwMs = bwLatency.isEmpty() ? m_captureLatencyMs : bwLatency.toLongLong();
+    }
+    m_angleLookup = (qgetenv("DMX_ANGLE_LOOKUP") != "0");
+    m_lastAngleDiagMs = 0;
 
     {
         const QDateTime now = QDateTime::currentDateTime();
@@ -409,6 +418,13 @@ MainWindow::MainWindow(QWidget *parent) :
            QStringLiteral("BUILD logRoot=%1 (file=%2)").arg(resolveLogRoot(),
                m_logFile ? m_logFile->fileName() : QStringLiteral("(disabled)")),
            QStringLiteral("#FFD54F"));
+    addLog(QStringLiteral("ANGLE"),
+           QStringLiteral("lookup=%1 D=%2ms rgbD=%3ms bwD=%4ms")
+               .arg(m_angleLookup ? 1 : 0)
+               .arg(m_captureLatencyMs)
+               .arg(m_captureLatencyRgbMs)
+               .arg(m_captureLatencyBwMs),
+           QStringLiteral("#9C27B0"));
     QWidget *central = new QWidget(this);
     setCentralWidget(central);
     QGridLayout *layout = new QGridLayout(central);
@@ -568,7 +584,9 @@ MainWindow::MainWindow(QWidget *parent) :
             m_zeroAngleRaw = realAngle;
         }
         const double displayAngle = toRelativeAngle(realAngle);
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
         m_latestAngle = displayAngle;
+        m_angleHistory.add(nowMs, displayAngle);
         radarView->setCurrentAngle(displayAngle);
         m_angleLabel->setText(QString("%1°").arg(displayAngle, 0, 'f', 2));
         if (m_colorThread) m_colorThread->setCurrentAngle(displayAngle);
@@ -577,7 +595,6 @@ MainWindow::MainWindow(QWidget *parent) :
         static bool speedInit = false;
         static double prevA = 0.0;
         static qint64 prevMs = 0;
-        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
         if (!speedInit) {
             speedInit = true;
             prevA = displayAngle;
@@ -1128,7 +1145,36 @@ void MainWindow::onPanoRefreshTick()
 void MainWindow::onPathReceived(const QString &type, const QString &path, const QString &sender, qint64 rxMs)
 {
     const QString t = type.trimmed().toUpper();
-    const double angleDeg = m_zeroAngleInited ? m_latestAngle : -1.0;
+    double angleDeg = m_zeroAngleInited ? m_latestAngle : -1.0;
+    qint64 latencyMs = m_captureLatencyRgbMs;
+    if (t == "BW" || t == "GRAY") latencyMs = m_captureLatencyBwMs;
+
+    bool lookupClamped = false;
+    qint64 lookupBracketMs = 0;
+    bool lookupOk = false;
+    if (m_zeroAngleInited && m_angleLookup && !m_angleHistory.empty()) {
+        double looked = -1.0;
+        lookupOk = m_angleHistory.angleAt(rxMs - latencyMs, &looked, &lookupClamped, &lookupBracketMs);
+        if (lookupOk && looked >= 0.0) angleDeg = looked;
+    }
+
+    const qint64 nowD = QDateTime::currentMSecsSinceEpoch();
+    if (m_angleLookup && (nowD - m_lastAngleDiagMs) > 1000) {
+        m_lastAngleDiagMs = nowD;
+        addLog(QStringLiteral("ANGLE"),
+            QString("type=%1 recv=%2 capture=%3 D=%4ms hist=%5 recent1s=%6 bracket=%7ms clamped=%8 ok=%9")
+                .arg(t)
+                .arg(m_latestAngle, 0, 'f', 1)
+                .arg(angleDeg, 0, 'f', 1)
+                .arg(latencyMs)
+                .arg(m_angleHistory.size())
+                .arg(m_angleHistory.recentCount(nowD, 1000))
+                .arg(lookupBracketMs)
+                .arg(lookupClamped ? 1 : 0)
+                .arg(lookupOk ? 1 : 0),
+            "#9C27B0");
+    }
+
     if (t == "RGB") {
         if (m_colorThread) m_colorThread->enqueuePath(t, path, sender, angleDeg, rxMs);
         return;

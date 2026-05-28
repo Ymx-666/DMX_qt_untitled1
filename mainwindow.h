@@ -34,6 +34,81 @@
 namespace Ui { class MainWindow; }
 class RawRecorder;
 
+// Main-thread angle history used to place frames by receive-time lookup.
+class AngleHistory
+{
+public:
+    void add(qint64 tMs, double angleDeg) {
+        m_t.push_back(tMs);
+        m_a.push_back(normalize(angleDeg));
+        const qint64 cutoff = tMs - 10000;
+        int drop = 0;
+        while (drop < m_t.size() && m_t[drop] < cutoff) ++drop;
+        if (drop > 0) {
+            m_t.remove(0, drop);
+            m_a.remove(0, drop);
+        }
+    }
+
+    bool empty() const { return m_t.isEmpty(); }
+    int size() const { return m_t.size(); }
+
+    int recentCount(qint64 nowMs, qint64 windowMs) const {
+        int n = 0;
+        for (int i = m_t.size() - 1; i >= 0; --i) {
+            if ((nowMs - m_t[i]) > windowMs) break;
+            ++n;
+        }
+        return n;
+    }
+
+    bool angleAt(qint64 tMs, double *outAngle, bool *outClamped, qint64 *outBracketMs) const {
+        if (outClamped) *outClamped = false;
+        if (outBracketMs) *outBracketMs = 0;
+        const int n = m_t.size();
+        if (n == 0 || !outAngle) return false;
+        if (n == 1 || tMs <= m_t[0]) {
+            *outAngle = m_a[0];
+            if (outClamped) *outClamped = true;
+            return true;
+        }
+        if (tMs >= m_t[n - 1]) {
+            *outAngle = m_a[n - 1];
+            if (outClamped) *outClamped = true;
+            return true;
+        }
+
+        int hi = n - 1;
+        while (hi > 0 && m_t[hi - 1] > tMs) --hi;
+        const qint64 t0 = m_t[hi - 1];
+        const qint64 t1 = m_t[hi];
+        const double a0 = m_a[hi - 1];
+        const double a1 = m_a[hi];
+        if (outBracketMs) *outBracketMs = t1 - t0;
+        if (t1 == t0) {
+            *outAngle = a1;
+            return true;
+        }
+
+        const double f = double(tMs - t0) / double(t1 - t0);
+        double d = a1 - a0;
+        while (d > 180.0) d -= 360.0;
+        while (d < -180.0) d += 360.0;
+        *outAngle = normalize(a0 + f * d);
+        return true;
+    }
+
+private:
+    static double normalize(double a) {
+        while (a < 0.0) a += 360.0;
+        while (a >= 360.0) a -= 360.0;
+        return a;
+    }
+
+    QVector<qint64> m_t;
+    QVector<double> m_a;
+};
+
 class RoiWorker : public QObject
 {
     Q_OBJECT
@@ -163,6 +238,12 @@ private:
     QVector<RadarTarget> m_simTargets;
     bool m_zeroAngleInited = false;
     double m_zeroAngleRaw = 0.0;
+    AngleHistory m_angleHistory;
+    qint64 m_captureLatencyMs = 0;
+    qint64 m_captureLatencyRgbMs = 0;
+    qint64 m_captureLatencyBwMs = 0;
+    bool m_angleLookup = true;
+    qint64 m_lastAngleDiagMs = 0;
     double m_pendingCaptureAngle = 0.0;
     QImage m_lastColorRoi;
     QImage m_lastThermalRoi;
