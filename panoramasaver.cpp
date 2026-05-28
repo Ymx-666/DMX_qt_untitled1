@@ -1,4 +1,4 @@
-#include "panoramasaver.h"
+﻿#include "panoramasaver.h"
 
 #include "panoramacache.h"
 
@@ -109,28 +109,36 @@ void PanoramaSaver::process()
     }
 
     QDir().mkpath(job.outDir);
-    const QString rgbDir = QDir(job.outDir).filePath(QStringLiteral("rgb"));
-    const QString bwDir = QDir(job.outDir).filePath(QStringLiteral("bw"));
-    QDir().mkpath(rgbDir);
-    QDir().mkpath(bwDir);
 
-    QJsonObject root;
-    root.insert(QStringLiteral("saveId"), (qint64)job.id);
-    root.insert(QStringLiteral("createdMs"), (qint64)QDateTime::currentMSecsSinceEpoch());
-    root.insert(QStringLiteral("panoW"), rgbFull.panoW);
-    root.insert(QStringLiteral("panoH"), rgbFull.panoH);
-    root.insert(QStringLiteral("segments"), rgbFull.segments);
-    root.insert(QStringLiteral("sliceW"), rgbFull.sliceW);
+    // JPEG 单边最大 65535，我们留一点余量取 65500，保证 libjpeg 不卡限。
+    const int JPEG_MAX_DIM = 65500;
+    const int saveW = qMin(rgbFull.panoW, JPEG_MAX_DIM);
+    const int saveH = rgbFull.panoH;
+    const int segments = rgbFull.segments;
+    const int sliceW = rgbFull.sliceW;
 
-    QJsonObject rgbObj;
-    rgbObj.insert(QStringLiteral("format"), QStringLiteral("jpg"));
-    rgbObj.insert(QStringLiteral("quality"), job.rgbJpegQuality);
-    QJsonArray rgbTiles;
+    // 一次性分配两张完整全景图（合并 tile）。
+    QImage rgbCombined(saveW, saveH, QImage::Format_RGB32);
+    if (rgbCombined.isNull()) {
+        emit saveFinished(job.id, false, QStringLiteral("RGB allocate failed (out of memory)"), job.outDir);
+        schedule();
+        return;
+    }
+    rgbCombined.fill(Qt::black);
 
-    QJsonObject bwObj;
-    bwObj.insert(QStringLiteral("format"), QStringLiteral("jpg"));
-    bwObj.insert(QStringLiteral("quality"), job.rgbJpegQuality);
-    QJsonArray bwTiles;
+    QImage bwCombined(saveW, saveH, QImage::Format_Indexed8);
+    if (bwCombined.isNull()) {
+        emit saveFinished(job.id, false, QStringLiteral("BW allocate failed (out of memory)"), job.outDir);
+        schedule();
+        return;
+    }
+    {
+        QVector<QRgb> palette;
+        palette.reserve(256);
+        for (int i = 0; i < 256; ++i) palette.append(qRgb(i, i, i));
+        bwCombined.setColorTable(palette);
+    }
+    bwCombined.fill(0);
 
     const QByteArray env = qgetenv("PANO_SAVE_RAW");
     const bool saveRawBytes = (!env.isEmpty() && env != "0");
@@ -156,32 +164,40 @@ void PanoramaSaver::process()
     QJsonArray rawRgb;
     QJsonArray rawBw;
 
-    QString err;
-    for (int tile = 0; tile < rgbFull.segments; ++tile) {
+    const qint64 composeStart = QDateTime::currentMSecsSinceEpoch();
+
+    for (int tile = 0; tile < segments; ++tile) {
+        const int startX = tile * sliceW;
+        if (startX >= saveW) break;
+
         QImage rgbTile;
         if (!m_cache->copyFullRgbTile(tile, rgbTile)) {
             emit saveFinished(job.id, false, QStringLiteral("RGB tile copy failed"), job.outDir);
             schedule();
             return;
         }
-        const QString rgbName = QStringLiteral("rgb_") + padDec(tile, 4) + QStringLiteral(".jpg");
-        const QString rgbPath = QDir(rgbDir).filePath(rgbName);
-        err.clear();
-        if (!writeImageFile(rgbPath, rgbTile, "jpg", job.rgbJpegQuality, &err)) {
-            emit saveFinished(job.id, false, QStringLiteral("RGB write failed: %1").arg(err), job.outDir);
+        const int copyW = qMin(rgbTile.width(), saveW - startX);
+        for (int y = 0; y < saveH; ++y) {
+            const QRgb *src = reinterpret_cast<const QRgb*>(rgbTile.constScanLine(y));
+            QRgb *dst = reinterpret_cast<QRgb*>(rgbCombined.scanLine(y)) + startX;
+            memcpy(dst, src, (size_t)copyW * 4);
+        }
+
+        QImage bwTile;
+        if (!m_cache->copyFullBwTile(tile, bwTile)) {
+            emit saveFinished(job.id, false, QStringLiteral("BW tile copy failed"), job.outDir);
             schedule();
             return;
         }
-        const QFileInfo rfi(rgbPath);
-        QJsonObject r;
-        r.insert(QStringLiteral("tile"), tile);
-        r.insert(QStringLiteral("file"), rgbName);
-        r.insert(QStringLiteral("bytes"), (qint64)rfi.size());
-        rgbTiles.append(r);
+        for (int y = 0; y < saveH; ++y) {
+            const uchar *src = bwTile.constScanLine(y);
+            uchar *dst = bwCombined.scanLine(y) + startX;
+            memcpy(dst, src, (size_t)copyW);
+        }
 
         if (saveRawBytes && tile < rgbPaths.size() && !rgbPaths[tile].isEmpty()) {
             QByteArray bytes;
-            err.clear();
+            QString err;
             if (readAllBytes(rgbPaths[tile], &bytes, &err)) {
                 const QString ext = safeExtFromPath(rgbPaths[tile]);
                 const QString rawName = QStringLiteral("rgb_") + padDec(tile, 4) + QStringLiteral(".") + ext;
@@ -192,7 +208,7 @@ void PanoramaSaver::process()
                     rf.close();
                     QJsonObject ro;
                     ro.insert(QStringLiteral("tile"), tile);
-                    ro.insert(QStringLiteral("file"), rawName);
+                    ro.insert(QStringLiteral("file"), QStringLiteral("raw/rgb/") + rawName);
                     ro.insert(QStringLiteral("src"), rgbPaths[tile]);
                     ro.insert(QStringLiteral("fileIdx"), (tile < rgbIdx.size()) ? (qint64)rgbIdx[tile] : (qint64)0);
                     ro.insert(QStringLiteral("rxMs"), (tile < rgbRx.size()) ? (qint64)rgbRx[tile] : (qint64)0);
@@ -200,31 +216,9 @@ void PanoramaSaver::process()
                 }
             }
         }
-
-        QImage bwTile;
-        if (!m_cache->copyFullBwTile(tile, bwTile)) {
-            emit saveFinished(job.id, false, QStringLiteral("BW tile copy failed"), job.outDir);
-            schedule();
-            return;
-        }
-        const QString bwName = QStringLiteral("bw_") + padDec(tile, 4) + QStringLiteral(".jpg");
-        const QString bwPath = QDir(bwDir).filePath(bwName);
-        err.clear();
-        if (!writeImageFile(bwPath, bwTile, "jpg", job.rgbJpegQuality, &err)) {
-            emit saveFinished(job.id, false, QStringLiteral("BW write failed: %1").arg(err), job.outDir);
-            schedule();
-            return;
-        }
-        const QFileInfo bfi(bwPath);
-        QJsonObject b;
-        b.insert(QStringLiteral("tile"), tile);
-        b.insert(QStringLiteral("file"), bwName);
-        b.insert(QStringLiteral("bytes"), (qint64)bfi.size());
-        bwTiles.append(b);
-
         if (saveRawBytes && tile < bwPaths.size() && !bwPaths[tile].isEmpty()) {
             QByteArray bytes;
-            err.clear();
+            QString err;
             if (readAllBytes(bwPaths[tile], &bytes, &err)) {
                 const QString ext = safeExtFromPath(bwPaths[tile]);
                 const QString rawName = QStringLiteral("bw_") + padDec(tile, 4) + QStringLiteral(".") + ext;
@@ -235,7 +229,7 @@ void PanoramaSaver::process()
                     rf.close();
                     QJsonObject ro;
                     ro.insert(QStringLiteral("tile"), tile);
-                    ro.insert(QStringLiteral("file"), rawName);
+                    ro.insert(QStringLiteral("file"), QStringLiteral("raw/bw/") + rawName);
                     ro.insert(QStringLiteral("src"), bwPaths[tile]);
                     ro.insert(QStringLiteral("fileIdx"), (tile < bwIdx.size()) ? (qint64)bwIdx[tile] : (qint64)0);
                     ro.insert(QStringLiteral("rxMs"), (tile < bwRx.size()) ? (qint64)bwRx[tile] : (qint64)0);
@@ -245,12 +239,59 @@ void PanoramaSaver::process()
         }
     }
 
-    rgbObj.insert(QStringLiteral("tiles"), rgbTiles);
-    bwObj.insert(QStringLiteral("tiles"), bwTiles);
+    const qint64 composeMs = QDateTime::currentMSecsSinceEpoch() - composeStart;
+
+    QString err;
+
+    const qint64 rgbEncStart = QDateTime::currentMSecsSinceEpoch();
+    const QString rgbPath = QDir(job.outDir).filePath(QStringLiteral("rgb.jpg"));
+    if (!writeImageFile(rgbPath, rgbCombined, "jpg", job.rgbJpegQuality, &err)) {
+        emit saveFinished(job.id, false, QStringLiteral("RGB JPG write failed: %1").arg(err), job.outDir);
+        schedule();
+        return;
+    }
+    const qint64 rgbBytes = QFileInfo(rgbPath).size();
+    const qint64 rgbEncMs = QDateTime::currentMSecsSinceEpoch() - rgbEncStart;
+
+    const qint64 bwEncStart = QDateTime::currentMSecsSinceEpoch();
+    const QString bwPath = QDir(job.outDir).filePath(QStringLiteral("bw.jpg"));
+    if (!writeImageFile(bwPath, bwCombined, "jpg", job.rgbJpegQuality, &err)) {
+        emit saveFinished(job.id, false, QStringLiteral("BW JPG write failed: %1").arg(err), job.outDir);
+        schedule();
+        return;
+    }
+    const qint64 bwBytes = QFileInfo(bwPath).size();
+    const qint64 bwEncMs = QDateTime::currentMSecsSinceEpoch() - bwEncStart;
+
+    QJsonObject root;
+    root.insert(QStringLiteral("saveId"), (qint64)job.id);
+    root.insert(QStringLiteral("createdMs"), (qint64)QDateTime::currentMSecsSinceEpoch());
+    root.insert(QStringLiteral("panoW"), saveW);
+    root.insert(QStringLiteral("panoH"), saveH);
+    root.insert(QStringLiteral("originalPanoW"), rgbFull.panoW);
+    root.insert(QStringLiteral("croppedColumns"), rgbFull.panoW - saveW);
+    root.insert(QStringLiteral("composeMs"), composeMs);
+
+    QJsonObject rgbObj;
+    rgbObj.insert(QStringLiteral("file"), QStringLiteral("rgb.jpg"));
+    rgbObj.insert(QStringLiteral("format"), QStringLiteral("jpg"));
+    rgbObj.insert(QStringLiteral("quality"), job.rgbJpegQuality);
+    rgbObj.insert(QStringLiteral("bytes"), rgbBytes);
+    rgbObj.insert(QStringLiteral("encodeMs"), rgbEncMs);
     root.insert(QStringLiteral("rgb"), rgbObj);
+
+    QJsonObject bwObj;
+    bwObj.insert(QStringLiteral("file"), QStringLiteral("bw.jpg"));
+    bwObj.insert(QStringLiteral("format"), QStringLiteral("jpg"));
+    bwObj.insert(QStringLiteral("quality"), job.rgbJpegQuality);
+    bwObj.insert(QStringLiteral("bytes"), bwBytes);
+    bwObj.insert(QStringLiteral("encodeMs"), bwEncMs);
     root.insert(QStringLiteral("bw"), bwObj);
-    root.insert(QStringLiteral("rawRgb"), rawRgb);
-    root.insert(QStringLiteral("rawBw"), rawBw);
+
+    if (saveRawBytes) {
+        root.insert(QStringLiteral("rawRgb"), rawRgb);
+        root.insert(QStringLiteral("rawBw"), rawBw);
+    }
 
     const QString manifestPath = QDir(job.outDir).filePath(QStringLiteral("manifest.json"));
     QFile mf(manifestPath);
@@ -259,9 +300,15 @@ void PanoramaSaver::process()
         schedule();
         return;
     }
-    mf.write(QJsonDocument(root).toJson(QJsonDocument::Compact));
+    mf.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
     mf.close();
 
-    emit saveFinished(job.id, true, QStringLiteral("OK"), job.outDir);
+    emit saveFinished(job.id, true,
+        QString("OK panoW=%1 RGB=%2MB(%3ms) BW=%4MB(%5ms) compose=%6ms")
+            .arg(saveW)
+            .arg(rgbBytes / 1024 / 1024).arg(rgbEncMs)
+            .arg(bwBytes / 1024 / 1024).arg(bwEncMs)
+            .arg(composeMs),
+        job.outDir);
     schedule();
 }
