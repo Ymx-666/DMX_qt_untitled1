@@ -330,8 +330,10 @@ void PanoramaCache::pushFrameInternal(PanoramaCache::Stream &s, const QImage &fr
     else thumbSlice = ensureBw8(thumbSlice);
     if (thumbSlice.isNull()) return;
 
-    const int overlapFull = qMin(16, qMax(0, sliceWFull / 32));
-    const int overlapThumb = qMin(8, qMax(0, sliceWThumb / 32));
+    // overlap 必须为 0：原本的 alpha 混合会把每个 tile 左缘与"旧内容"（初始为黑）
+    // 做渐变，导致每帧之间出现黑缝。每个 tile 直接整块写入，紧密相接。
+    const int overlapFull = 0;
+    const int overlapThumb = 0;
     QImage fullSlice;
     if (writeFull) {
         fullSlice = frame.scaled(sliceWFull, fullH, Qt::IgnoreAspectRatio, Qt::FastTransformation);

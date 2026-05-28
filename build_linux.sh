@@ -8,7 +8,7 @@ mkdir -p build_linux
 cd build_linux
 
 echo "[1/2] qmake ..."
-qmake ../untitled1.pro -spec linux-g++
+qmake ../DMX.pro -spec linux-g++
 
 echo "[2/2] make -j$(nproc) ..."
 make -j$(nproc)
@@ -16,7 +16,7 @@ make -j$(nproc)
 echo ""
 echo "============================"
 echo "Build OK"
-echo "EXE: $(pwd)/untitled1"
+echo "EXE: $(pwd)/DMX"
 echo ""
-echo "运行: $(pwd)/untitled1"
+echo "运行: $(pwd)/DMX"
 echo "============================"

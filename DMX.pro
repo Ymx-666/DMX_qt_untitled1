@@ -7,7 +7,7 @@ greaterThan(QT_MAJOR_VERSION, 4): QT += widgets
 CONFIG += c++11
 
 # 目标程序名称
-TARGET = untitled1
+TARGET = DMX
 TEMPLATE = app
 
 # 1. 链接 FFmpeg 核心库（处理视频流必备）

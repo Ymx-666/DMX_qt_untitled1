@@ -1,4 +1,4 @@
-#include "mainwindow.h"
+﻿#include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include <QGridLayout>
 #include <QHBoxLayout>
@@ -37,6 +37,15 @@
 
 static inline QString u8s(const char *s) { return QString::fromUtf8(s); }
 
+// Linux 默认数据根：优先用 4TB 数据卷，避免写入系统盘 ~ 目录。
+// 可用环境变量 DMX_DATA_ROOT 覆盖整个根，或用各自的 DMX_*_ROOT 单独覆盖。
+static QString dataRootLinux()
+{
+    QString r = QString::fromLocal8Bit(qgetenv("DMX_DATA_ROOT"));
+    if (!r.isEmpty()) return r;
+    return QStringLiteral("/media/sht/6C3CCFC13CCF8494/data");
+}
+
 static QString resolveSaveRoot()
 {
     QString r = QString::fromLocal8Bit(qgetenv("DMX_SAVE_ROOT"));
@@ -44,7 +53,7 @@ static QString resolveSaveRoot()
 #ifdef Q_OS_WIN
     return QStringLiteral("E:/.trae/program/DMX_qt/untitled1/data/SAVES");
 #else
-    return QDir::homePath() + QStringLiteral("/dmx_data/saves");
+    return dataRootLinux() + QStringLiteral("/saves");
 #endif
 }
 
@@ -55,7 +64,7 @@ static QString resolveRecordRoot()
 #ifdef Q_OS_WIN
     return QStringLiteral("D:/DMX_data");
 #else
-    return QDir::homePath() + QStringLiteral("/dmx_data/recordings");
+    return dataRootLinux() + QStringLiteral("/recordings");
 #endif
 }
 
@@ -66,7 +75,7 @@ static QString resolveLogRoot()
 #ifdef Q_OS_WIN
     return QStringLiteral("E:/.trae/program/DMX_qt/untitled1/data/logs");
 #else
-    return QDir::homePath() + QStringLiteral("/dmx_data/logs");
+    return dataRootLinux() + QStringLiteral("/logs");
 #endif
 }
 
