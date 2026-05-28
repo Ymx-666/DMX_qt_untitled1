@@ -549,6 +549,12 @@ MainWindow::MainWindow(QWidget *parent) :
         thermalPanoramaView->updateImage(blackRgb);
     }
 
+    // ~30fps steady full-redraw of the panoramas (see onPanoRefreshTick).
+    m_panoRefreshTimer = new QTimer(this);
+    m_panoRefreshTimer->setInterval(33);
+    connect(m_panoRefreshTimer, &QTimer::timeout, this, &MainWindow::onPanoRefreshTick);
+    m_panoRefreshTimer->start();
+
     m_latestAngle = 0.0;
     m_prevCheckAngle = 0.0;
 
@@ -1089,8 +1095,11 @@ void MainWindow::drainRender()
             dirtyBw |= QRect(x, 0, infoBw.sliceW, infoBw.panoH);
         }
     }
-    if (!dirtyRgb.isNull() && panoramaView) panoramaView->updateImagePartial(m_uiThumbRgb, dirtyRgb);
-    if (!dirtyBw.isNull() && thermalPanoramaView) thermalPanoramaView->updateImagePartial(m_uiThumbBw, dirtyBw);
+    // Keep m_uiThumb* up to date (cheap incremental blit above), but defer the
+    // actual widget repaint to the steady 30fps timer (onPanoRefreshTick) which
+    // redraws the WHOLE panorama at once -> smooth, no tile-by-tile blockiness.
+    if (!dirtyRgb.isNull()) m_panoRgbDirty = true;
+    if (!dirtyBw.isNull()) m_panoBwDirty = true;
 
     const qint64 nowMs = m_perfTimer.isValid() ? m_perfTimer.elapsed() : 0;
     if ((nowMs - m_lastDetectMs) >= 120) {
@@ -1106,6 +1115,20 @@ void MainWindow::drainRender()
     }
     m_prevCheckAngle = m_latestAngle;
     updateUiState();
+}
+
+void MainWindow::onPanoRefreshTick()
+{
+    // Steady ~30fps full-image redraw of both panoramas, decoupled from data
+    // arrival. Only repaint when something actually changed since last tick.
+    if (m_panoRgbDirty && panoramaView && !m_uiThumbRgb.isNull()) {
+        panoramaView->updateImage(m_uiThumbRgb);
+        m_panoRgbDirty = false;
+    }
+    if (m_panoBwDirty && thermalPanoramaView && !m_uiThumbBw.isNull()) {
+        thermalPanoramaView->updateImage(m_uiThumbBw);
+        m_panoBwDirty = false;
+    }
 }
 
 void MainWindow::onPathReceived(const QString &type, const QString &path, const QString &sender, qint64 rxMs)

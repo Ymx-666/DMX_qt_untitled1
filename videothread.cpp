@@ -83,7 +83,12 @@ static QImage toIndexed8Gray(const QImage &src)
     return out;
 }
 
-static QImage rotateCCW90(const QImage &src)
+// Orient a device frame for the panorama: rotate CCW 90 degrees, and (when
+// mirrorH is true) horizontally mirror the result in the SAME pixel pass so the
+// stitched panorama matches the real scene (the device frame is flipped relative
+// to the turntable sweep, which caused the seam/misalignment). Fusing the mirror
+// into the rotation avoids a second full-image copy (BW path is the bottleneck).
+static QImage rotateCCW90(const QImage &src, bool mirrorH)
 {
     if (src.isNull()) return QImage();
     const int w = src.width();
@@ -95,10 +100,11 @@ static QImage rotateCCW90(const QImage &src)
         if (dst.isNull()) return QImage();
         for (int y = 0; y < h; ++y) {
             const QRgb *srcLine = reinterpret_cast<const QRgb*>(src.constScanLine(y));
+            const int dx = mirrorH ? (h - 1 - y) : y;
             for (int x = 0; x < w; ++x) {
                 const int dy = (w - 1 - x);
                 QRgb *dstLine = reinterpret_cast<QRgb*>(dst.scanLine(dy));
-                dstLine[y] = srcLine[x];
+                dstLine[dx] = srcLine[x];
             }
         }
         return dst;
@@ -110,16 +116,17 @@ static QImage rotateCCW90(const QImage &src)
         dst.setColorTable(src.colorTable().isEmpty() ? grayColorTable() : src.colorTable());
         for (int y = 0; y < h; ++y) {
             const uchar *srcLine = src.constScanLine(y);
+            const int dx = mirrorH ? (h - 1 - y) : y;
             for (int x = 0; x < w; ++x) {
                 const int dy = (w - 1 - x);
                 uchar *dstLine = dst.scanLine(dy);
-                dstLine[y] = srcLine[x];
+                dstLine[dx] = srcLine[x];
             }
         }
         return dst;
     }
 
-    return rotateCCW90(src.convertToFormat(QImage::Format_RGB32));
+    return rotateCCW90(src.convertToFormat(QImage::Format_RGB32), mirrorH);
 }
 
 static QString extractSenderIp(const QString &sender)
@@ -947,7 +954,7 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
             noteReadFail(QStringLiteral("BW"), QStringLiteral("toGray failed: %1").arg(usedPath), senderIp, nowMs);
             return true;
         }
-        bwFull = rotateCCW90(bwFull);
+        bwFull = rotateCCW90(bwFull, true);
         if (bwFull.isNull()) {
             ++m_totalReadFails;
             noteReadFail(QStringLiteral("BW"), QStringLiteral("rotate failed: %1").arg(usedPath), senderIp, nowMs);
@@ -974,7 +981,7 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
         noteReadFail(QStringLiteral("RGB"), QStringLiteral("toRGB failed: %1").arg(usedPath), senderIp, nowMs);
         return true;
     }
-    rgbFull = rotateCCW90(rgbFull);
+    rgbFull = rotateCCW90(rgbFull, true);
     if (rgbFull.isNull()) {
         ++m_totalReadFails;
         noteReadFail(QStringLiteral("RGB"), QStringLiteral("rotate failed: %1").arg(usedPath), senderIp, nowMs);

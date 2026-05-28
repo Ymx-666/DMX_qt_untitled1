@@ -96,6 +96,7 @@ private slots:
     void onRadarClicked(int angle);
     void onRenderTick();
     void drainRender();
+    void onPanoRefreshTick();
     void onThumbRoiReady(double angle, const QImage &rgb, const QImage &bwRgb32);
 
     // 【新增】：日志写入槽函数
@@ -150,6 +151,11 @@ private:
     QAtomicInteger<int> m_renderPending;
     QImage m_uiThumbRgb;
     QImage m_uiThumbBw;
+    // Panorama display is driven by a steady ~30fps timer doing a full redraw
+    // (decoupled from frame arrival) to avoid the tile-by-tile blocky refresh.
+    QTimer *m_panoRefreshTimer = nullptr;
+    bool m_panoRgbDirty = false;
+    bool m_panoBwDirty = false;
 
     bool m_isDeviceOpen;
     double m_latestAngle;
