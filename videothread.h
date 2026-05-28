@@ -80,6 +80,8 @@ private:
     quint64 m_totalDecodedFrames = 0;
     quint64 m_totalDroppedPackets = 0;
     quint64 m_totalReadFails = 0;
+    quint64 m_rxRgb = 0;
+    quint64 m_rxBw = 0;
 
     quint64 m_handleMsAccum = 0;
     quint64 m_handleMsMax = 0;
@@ -90,6 +92,8 @@ private:
     quint64 m_lastStatDecodedFrames = 0;
     quint64 m_lastStatDroppedPackets = 0;
     quint64 m_lastStatReadFails = 0;
+    quint64 m_lastStatRxRgb = 0;
+    quint64 m_lastStatRxBw = 0;
 
     quint64 m_totalReadyReadCalls = 0;
     quint64 m_totalDatagramsRead = 0;

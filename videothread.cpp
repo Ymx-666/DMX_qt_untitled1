@@ -351,6 +351,8 @@ void VideoWorker::start()
     m_totalDecodedFrames = 0;
     m_totalDroppedPackets = 0;
     m_totalReadFails = 0;
+    m_rxRgb = 0;
+    m_rxBw = 0;
     m_handleMsAccum = 0;
     m_handleMsMax = 0;
     m_handleCount = 0;
@@ -365,6 +367,8 @@ void VideoWorker::start()
     m_lastStatDecodedFrames = 0;
     m_lastStatDroppedPackets = 0;
     m_lastStatReadFails = 0;
+    m_lastStatRxRgb = 0;
+    m_lastStatRxBw = 0;
     m_lastRxType.clear();
     m_lastRxPath.clear();
     m_pendingType.clear();
@@ -552,6 +556,14 @@ void VideoWorker::onStatTick()
 
     if (m_type == 2) {
         emit logRequested(QString("RX(%1)").arg(port), QString("pkt=%1%2%3").arg(rx).arg(io).arg(tail), "#00AAAA");
+        const quint64 dr = m_rxRgb - m_lastStatRxRgb;
+        const quint64 db = m_rxBw - m_lastStatRxBw;
+        m_lastStatRxRgb = m_rxRgb;
+        m_lastStatRxBw = m_rxBw;
+        emit logRequested(
+            QStringLiteral("RXTYPE"),
+            QString("RGB=%1 BW=%2 total=%3").arg(dr).arg(db).arg(dr + db),
+            QStringLiteral("#00AAAA"));
     } else {
         emit logRequested(
             QString("RX(%1)").arg(port),
@@ -768,10 +780,16 @@ void VideoWorker::processPathDatagrams()
         QString typeStr;
         QString originalPath;
         if (!parsePathPayload(msg, &typeStr, &originalPath)) continue;
+        const QString typeUpper = typeStr.trimmed().toUpper();
+        if (typeUpper == "RGB") {
+            ++m_rxRgb;
+        } else if (typeUpper == "BW" || typeUpper == "GRAY") {
+            ++m_rxBw;
+        }
 
         const QString senderStr = QString("%1:%2").arg(sender.toString()).arg(senderPort);
         if (m_type == 2) {
-            emit pathReceived(typeStr.trimmed().toUpper(), originalPath.trimmed(), senderStr, rxMs);
+            emit pathReceived(typeUpper, originalPath.trimmed(), senderStr, rxMs);
             continue;
         }
         enqueuePath(typeStr, originalPath, senderStr, 0.0, rxMs);
