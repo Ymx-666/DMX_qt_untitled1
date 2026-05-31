@@ -6,6 +6,7 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QDateTime>
+#include <QDataStream>
 #include <QImageWriter>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -43,6 +44,58 @@ static bool writeImageFile(const QString &path, const QImage &img, const QByteAr
     if (!w.write(img)) {
         if (err) *err = w.errorString();
         return false;
+    }
+    return true;
+}
+
+static bool writeBmp32Lossless(const QString &path, const QImage &img, QString *err)
+{
+    if (img.isNull() || img.format() != QImage::Format_RGB32) {
+        if (err) *err = QStringLiteral("Invalid RGB32 image");
+        return false;
+    }
+
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+        if (err) *err = QStringLiteral("Open failed: %1").arg(path);
+        return false;
+    }
+
+    const int w = img.width();
+    const int h = img.height();
+    const quint32 pixelOffset = 54;
+    const quint32 rowStride = (quint32)w * 4;
+    const quint32 imageSize = rowStride * (quint32)h;
+    const quint32 fileSize = pixelOffset + imageSize;
+
+    QDataStream ds(&f);
+    ds.setByteOrder(QDataStream::LittleEndian);
+    ds << quint16(0x4D42);
+    ds << quint32(fileSize);
+    ds << quint16(0) << quint16(0);
+    ds << quint32(pixelOffset);
+    ds << quint32(40);
+    ds << qint32(w);
+    ds << qint32(h);
+    ds << quint16(1);
+    ds << quint16(32);
+    ds << quint32(0);
+    ds << quint32(imageSize);
+    ds << qint32(0);
+    ds << qint32(0);
+    ds << quint32(0);
+    ds << quint32(0);
+    if (ds.status() != QDataStream::Ok) {
+        if (err) *err = QStringLiteral("Header write failed: %1").arg(path);
+        return false;
+    }
+
+    for (int y = h - 1; y >= 0; --y) {
+        const char *line = reinterpret_cast<const char*>(img.constScanLine(y));
+        if (f.write(line, rowStride) != (qint64)rowStride) {
+            if (err) *err = QStringLiteral("Pixel write failed: %1").arg(path);
+            return false;
+        }
     }
     return true;
 }
@@ -110,9 +163,7 @@ void PanoramaSaver::process()
 
     QDir().mkpath(job.outDir);
 
-    // JPEG 单边最大 65535，我们留一点余量取 65500，保证 libjpeg 不卡限。
-    const int JPEG_MAX_DIM = 65500;
-    const int saveW = qMin(rgbFull.panoW, JPEG_MAX_DIM);
+    const int saveW = rgbFull.panoW;
     const int saveH = rgbFull.panoH;
     const int segments = rgbFull.segments;
     const int sliceW = rgbFull.sliceW;
@@ -239,28 +290,28 @@ void PanoramaSaver::process()
 
     QString err;
 
-    const qint64 rgbEncStart = QDateTime::currentMSecsSinceEpoch();
-    const QString rgbPath = QDir(job.outDir).filePath(QStringLiteral("rgb.jpg"));
-    if (!writeImageFile(rgbPath, rgbCombined, "jpg", job.rgbJpegQuality, &err)) {
-        emit saveFinished(job.id, false, QStringLiteral("RGB JPG write failed: %1").arg(err), job.outDir);
+    const qint64 rgbWriteStart = QDateTime::currentMSecsSinceEpoch();
+    const QString rgbPath = QDir(job.outDir).filePath(QStringLiteral("rgb_lossless.bmp"));
+    if (!writeBmp32Lossless(rgbPath, rgbCombined, &err)) {
+        emit saveFinished(job.id, false, QStringLiteral("RGB BMP write failed: %1").arg(err), job.outDir);
         schedule();
         return;
     }
     const qint64 rgbBytes = QFileInfo(rgbPath).size();
-    const qint64 rgbEncMs = QDateTime::currentMSecsSinceEpoch() - rgbEncStart;
+    const qint64 rgbWriteMs = QDateTime::currentMSecsSinceEpoch() - rgbWriteStart;
 
-    const qint64 bwEncStart = QDateTime::currentMSecsSinceEpoch();
-    const QString bwPath = QDir(job.outDir).filePath(QStringLiteral("bw.jpg"));
-    if (!writeImageFile(bwPath, bwCombined, "jpg", job.rgbJpegQuality, &err)) {
-        emit saveFinished(job.id, false, QStringLiteral("BW JPG write failed: %1").arg(err), job.outDir);
+    const qint64 bwWriteStart = QDateTime::currentMSecsSinceEpoch();
+    const QString bwPath = QDir(job.outDir).filePath(QStringLiteral("bw_lossless.bmp"));
+    if (!writeBmp32Lossless(bwPath, bwCombined, &err)) {
+        emit saveFinished(job.id, false, QStringLiteral("BW BMP write failed: %1").arg(err), job.outDir);
         schedule();
         return;
     }
     const qint64 bwBytes = QFileInfo(bwPath).size();
-    const qint64 bwEncMs = QDateTime::currentMSecsSinceEpoch() - bwEncStart;
+    const qint64 bwWriteMs = QDateTime::currentMSecsSinceEpoch() - bwWriteStart;
 
-    // 额外保存降采样预览图：原图 65500 宽超出绝大多数看图器上限，
-    // 这里缩到 <=8192 宽，任何看图器都能秒开。全分辨率原图保留供算法使用。
+    // Keep small JPEG previews for fast viewing; full-size outputs are BMP and
+    // stay lossless at the complete panorama dimensions.
     const int previewW = qMin(saveW, 8192);
     const int previewH = (saveW > 0) ? (int)((qint64)saveH * previewW / saveW) : saveH;
     qint64 rgbPreviewBytes = 0;
@@ -289,23 +340,23 @@ void PanoramaSaver::process()
     root.insert(QStringLiteral("previewH"), previewH);
 
     QJsonObject rgbObj;
-    rgbObj.insert(QStringLiteral("file"), QStringLiteral("rgb.jpg"));
+    rgbObj.insert(QStringLiteral("file"), QStringLiteral("rgb_lossless.bmp"));
     rgbObj.insert(QStringLiteral("preview"), QStringLiteral("rgb_preview.jpg"));
-    rgbObj.insert(QStringLiteral("format"), QStringLiteral("jpg"));
-    rgbObj.insert(QStringLiteral("quality"), job.rgbJpegQuality);
+    rgbObj.insert(QStringLiteral("format"), QStringLiteral("bmp32"));
+    rgbObj.insert(QStringLiteral("lossless"), true);
     rgbObj.insert(QStringLiteral("bytes"), rgbBytes);
     rgbObj.insert(QStringLiteral("previewBytes"), rgbPreviewBytes);
-    rgbObj.insert(QStringLiteral("encodeMs"), rgbEncMs);
+    rgbObj.insert(QStringLiteral("writeMs"), rgbWriteMs);
     root.insert(QStringLiteral("rgb"), rgbObj);
 
     QJsonObject bwObj;
-    bwObj.insert(QStringLiteral("file"), QStringLiteral("bw.jpg"));
+    bwObj.insert(QStringLiteral("file"), QStringLiteral("bw_lossless.bmp"));
     bwObj.insert(QStringLiteral("preview"), QStringLiteral("bw_preview.jpg"));
-    bwObj.insert(QStringLiteral("format"), QStringLiteral("jpg"));
-    bwObj.insert(QStringLiteral("quality"), job.rgbJpegQuality);
+    bwObj.insert(QStringLiteral("format"), QStringLiteral("bmp32"));
+    bwObj.insert(QStringLiteral("lossless"), true);
     bwObj.insert(QStringLiteral("bytes"), bwBytes);
     bwObj.insert(QStringLiteral("previewBytes"), bwPreviewBytes);
-    bwObj.insert(QStringLiteral("encodeMs"), bwEncMs);
+    bwObj.insert(QStringLiteral("writeMs"), bwWriteMs);
     root.insert(QStringLiteral("bw"), bwObj);
 
     if (saveRawBytes) {
@@ -324,10 +375,10 @@ void PanoramaSaver::process()
     mf.close();
 
     emit saveFinished(job.id, true,
-        QString("OK panoW=%1 RGB=%2MB(%3ms) BW=%4MB(%5ms) compose=%6ms")
+        QString("OK panoW=%1 lossless BMP RGB=%2MB(%3ms) BW=%4MB(%5ms) compose=%6ms")
             .arg(saveW)
-            .arg(rgbBytes / 1024 / 1024).arg(rgbEncMs)
-            .arg(bwBytes / 1024 / 1024).arg(bwEncMs)
+            .arg(rgbBytes / 1024 / 1024).arg(rgbWriteMs)
+            .arg(bwBytes / 1024 / 1024).arg(bwWriteMs)
             .arg(composeMs),
         job.outDir);
     schedule();
