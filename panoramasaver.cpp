@@ -1,5 +1,6 @@
 ﻿#include "panoramasaver.h"
 
+#include "appconfig.h"
 #include "panoramacache.h"
 
 #include <QDir>
@@ -17,7 +18,7 @@ PanoramaSaver::PanoramaSaver(QSharedPointer<PanoramaCache> cache, QObject *paren
 {
 }
 
-void PanoramaSaver::enqueueSave(QString outDir, int rgbJpegQuality)
+void PanoramaSaver::enqueueSave(QString outDir, int rgbJpegQuality, int previewMaxWidth)
 {
     Job j;
     {
@@ -25,6 +26,7 @@ void PanoramaSaver::enqueueSave(QString outDir, int rgbJpegQuality)
         j.id = m_nextId++;
         j.outDir = std::move(outDir);
         j.rgbJpegQuality = rgbJpegQuality;
+        j.previewMaxWidth = previewMaxWidth;
         m_jobs.enqueue(j);
     }
     schedule();
@@ -187,8 +189,7 @@ void PanoramaSaver::process()
     }
     bwCombined.fill(Qt::black);
 
-    const QByteArray env = qgetenv("PANO_SAVE_RAW");
-    const bool saveRawBytes = (!env.isEmpty() && env != "0");
+    const bool saveRawBytes = AppConfig::instance().saveRawTiles;
 
     QVector<quint64> rgbIdx;
     QVector<QString> rgbPaths;
@@ -312,19 +313,20 @@ void PanoramaSaver::process()
 
     // Keep small JPEG previews for fast viewing; full-size outputs are BMP and
     // stay lossless at the complete panorama dimensions.
-    const int previewW = qMin(saveW, 8192);
+    const int previewLimit = qBound(512, job.previewMaxWidth, 65535);
+    const int previewW = qMin(saveW, previewLimit);
     const int previewH = (saveW > 0) ? (int)((qint64)saveH * previewW / saveW) : saveH;
     qint64 rgbPreviewBytes = 0;
     qint64 bwPreviewBytes = 0;
     if (previewW > 0 && previewH > 0 && previewW < saveW) {
         QImage rgbPreview = rgbCombined.scaled(previewW, previewH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         const QString rgbPreviewPath = QDir(job.outDir).filePath(QStringLiteral("rgb_preview.jpg"));
-        if (writeImageFile(rgbPreviewPath, rgbPreview, "jpg", 88, &err))
+        if (writeImageFile(rgbPreviewPath, rgbPreview, "jpg", job.rgbJpegQuality, &err))
             rgbPreviewBytes = QFileInfo(rgbPreviewPath).size();
 
         QImage bwPreview = bwCombined.scaled(previewW, previewH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         const QString bwPreviewPath = QDir(job.outDir).filePath(QStringLiteral("bw_preview.jpg"));
-        if (writeImageFile(bwPreviewPath, bwPreview, "jpg", 88, &err))
+        if (writeImageFile(bwPreviewPath, bwPreview, "jpg", job.rgbJpegQuality, &err))
             bwPreviewBytes = QFileInfo(bwPreviewPath).size();
     }
 

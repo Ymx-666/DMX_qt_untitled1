@@ -36,7 +36,7 @@ private slots:
     void readData();
 
 private:
-    void sendCommand(unsigned char cmd1, unsigned char cmd2, unsigned char data1, unsigned char data2);
+    bool sendCommand(unsigned char cmd1, unsigned char cmd2, unsigned char data1, unsigned char data2);
     void resetLapTimer(); // [新增] 重置计时的辅助函数
 
     QSerialPort *m_serialPort;

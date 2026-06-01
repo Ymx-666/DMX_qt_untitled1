@@ -1,4 +1,5 @@
 #include "videothread.h"
+#include "appconfig.h"
 #include "panoramacache.h"
 #include "rawrecorder.h"
 #include "udpprotocol.h"
@@ -157,7 +158,7 @@ static QString mapDevicePathToWindowsShare(QString path, const QString &senderIp
         path.replace("/", "\\");
 #else
         Q_UNUSED(senderIp);
-        QString mount = QString::fromLocal8Bit(qgetenv("DMX_SHARE_MOUNT"));
+        QString mount = AppConfig::instance().shareMount;
         if (mount.isEmpty()) mount = QStringLiteral("/mnt/dmx_share");
         path = mount + path.mid(QString("/data").length());
 #endif
@@ -342,7 +343,8 @@ VideoWorker::~VideoWorker()
 void VideoWorker::start()
 {
     m_running = true;
-    m_dropStaleForUi = (qgetenv("DMX_UI_NODROP") != "1");
+    m_dropStaleForUi = AppConfig::instance().uiDropStale;
+    m_uiQueueCap = AppConfig::instance().uiQueueCap;
     m_lastRecordedIdx = 0;
     m_emitTimer.start();
     m_lastTextEmitMs = 0;

@@ -32,7 +32,8 @@ SOURCES += main.cpp \
     videothread.cpp \
     panoramacache.cpp \
     panoramasaver.cpp \
-    rawrecorder.cpp
+    rawrecorder.cpp \
+    appconfig.cpp
 
 # 4. 项目头文件列表
 HEADERS += mainwindow.h \
@@ -45,7 +46,8 @@ HEADERS += mainwindow.h \
     videothread.h \
     panoramacache.h \
     panoramasaver.h \
-    rawrecorder.h
+    rawrecorder.h \
+    appconfig.h
 
 # 5. UI 设计文件
 FORMS += mainwindow.ui

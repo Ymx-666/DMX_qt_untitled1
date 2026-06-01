@@ -16,7 +16,7 @@ public:
     explicit PanoramaSaver(QSharedPointer<PanoramaCache> cache, QObject *parent = nullptr);
 
 public slots:
-    void enqueueSave(QString outDir, int rgbJpegQuality);
+    void enqueueSave(QString outDir, int rgbJpegQuality, int previewMaxWidth);
 
 signals:
     void saveFinished(quint64 saveId, bool ok, const QString &msg, const QString &outDir);
@@ -31,6 +31,7 @@ private:
         quint64 id = 0;
         QString outDir;
         int rgbJpegQuality = 95;
+        int previewMaxWidth = 8192;
     };
 
     QSharedPointer<PanoramaCache> m_cache;

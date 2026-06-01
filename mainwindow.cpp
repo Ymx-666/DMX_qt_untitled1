@@ -37,55 +37,25 @@
 
 #include "rawrecorder.h"
 #include "asciipath.h"
+#include "appconfig.h"
 
 static inline QString u8s(const char *s) { return QString::fromUtf8(s); }
 
-// Linux 默认数据根：优先用 4TB 数据卷，避免写入系统盘 ~ 目录。
-// 可用环境变量 DMX_DATA_ROOT 覆盖整个根，或用各自的 DMX_*_ROOT 单独覆盖。
-static QString dataRootLinux()
-{
-    QString r = QString::fromLocal8Bit(qgetenv("DMX_DATA_ROOT"));
-    if (!r.isEmpty()) return r;
-    return QStringLiteral("/media/sht/6C3CCFC13CCF8494/data");
-}
-
 static QString resolveSaveRoot()
 {
-    QString r = QString::fromLocal8Bit(qgetenv("DMX_SAVE_ROOT"));
-    if (!r.isEmpty()) return r;
-#ifdef Q_OS_WIN
-    return QStringLiteral("E:/.trae/program/DMX_qt/untitled1/data/SAVES");
-#else
-    return dataRootLinux() + QStringLiteral("/saves");
-#endif
+    return AppConfig::instance().saveRoot;
 }
 
 static QString resolveRecordRoot()
 {
-    QString r = QString::fromLocal8Bit(qgetenv("DMX_REC_ROOT"));
-    if (!r.isEmpty()) return r;
-#ifdef Q_OS_WIN
-    return QStringLiteral("D:/DMX_data");
-#else
-    return dataRootLinux() + QStringLiteral("/recordings");
-#endif
+    return AppConfig::instance().recordRoot;
 }
 
 static QString resolveLogRoot()
 {
-    QString r = QString::fromLocal8Bit(qgetenv("DMX_LOG_ROOT"));
-    if (!r.isEmpty()) return r;
-#ifdef Q_OS_WIN
-    return QStringLiteral("E:/.trae/program/DMX_qt/untitled1/data/logs");
-#else
-    return dataRootLinux() + QStringLiteral("/logs");
-#endif
+    return AppConfig::instance().logRoot;
 }
 
-
-const QString DEVICE_IP = "192.168.4.1";
-const quint16 CMD_PORT_SEND = 5001;
-const quint16 CMD_PORT_REPLY = 5002;
 
 class RoiPopupDialog : public QDialog
 {
@@ -343,14 +313,11 @@ MainWindow::MainWindow(QWidget *parent) :
     m_isDeviceOpen = false;
     m_lastDetectMs = 0;
     m_lastLogMs = 0;
-    m_captureLatencyMs = qgetenv("DMX_CAPTURE_LATENCY_MS").toLongLong();
-    {
-        const QByteArray rgbLatency = qgetenv("DMX_CAPTURE_LATENCY_MS_RGB");
-        const QByteArray bwLatency = qgetenv("DMX_CAPTURE_LATENCY_MS_BW");
-        m_captureLatencyRgbMs = rgbLatency.isEmpty() ? m_captureLatencyMs : rgbLatency.toLongLong();
-        m_captureLatencyBwMs = bwLatency.isEmpty() ? m_captureLatencyMs : bwLatency.toLongLong();
-    }
-    m_angleLookup = (qgetenv("DMX_ANGLE_LOOKUP") != "0");
+    const AppConfig &cfg = AppConfig::instance();
+    m_captureLatencyMs = cfg.captureLatencyMs;
+    m_captureLatencyRgbMs = cfg.captureLatencyRgbMs;
+    m_captureLatencyBwMs = cfg.captureLatencyBwMs;
+    m_angleLookup = cfg.angleLookup;
     m_lastAngleDiagMs = 0;
 
     {
@@ -373,10 +340,12 @@ MainWindow::MainWindow(QWidget *parent) :
     }
     m_renderPending.storeRelease(0);
     m_panoCache = QSharedPointer<PanoramaCache>(new PanoramaCache());
+    m_panoCache->configureFullSize(cfg.fullWidth, cfg.fullHeight);
+    m_panoCache->configureThumbSize(cfg.thumbWidth, cfg.thumbHeight);
     {
-        QImage rgb(8192, 240, QImage::Format_RGB32);
+        QImage rgb(cfg.thumbWidth, cfg.thumbHeight, QImage::Format_RGB32);
         rgb.fill(Qt::black);
-        QImage bw(8192, 240, QImage::Format_RGB32);
+        QImage bw(cfg.thumbWidth, cfg.thumbHeight, QImage::Format_RGB32);
         bw.fill(Qt::black);
         m_uiThumbRgb = rgb;
         m_uiThumbBw = bw;
@@ -410,6 +379,12 @@ MainWindow::MainWindow(QWidget *parent) :
            QStringLiteral("#FFD54F"));
     addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"),
            QStringLiteral("BUILD compiled=%1 %2").arg(QStringLiteral(__DATE__), QStringLiteral(__TIME__)),
+           QStringLiteral("#FFD54F"));
+    addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"),
+           QStringLiteral("CONFIG file=%1 loaded=%2%3")
+               .arg(cfg.loadedPath.isEmpty() ? QStringLiteral("(none)") : cfg.loadedPath)
+               .arg(cfg.loadedFromFile ? 1 : 0)
+               .arg(cfg.loadError.isEmpty() ? QString() : QStringLiteral(" error=%1").arg(cfg.loadError)),
            QStringLiteral("#FFD54F"));
     addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"),
            QStringLiteral("BUILD saveRoot=%1 recRoot=%2").arg(resolveSaveRoot(), resolveRecordRoot()),
@@ -572,6 +547,15 @@ MainWindow::MainWindow(QWidget *parent) :
 
     m_driver = new TurntableDriver(this);
     m_ctrlDialog = new TurntableControlDialog(m_driver, this);
+    TurntableControlDialog::Settings turntableSettings;
+    turntableSettings.serialPort = cfg.turntableSerialPort;
+    turntableSettings.baudRate = cfg.turntableBaudRate;
+    turntableSettings.direction = cfg.turntableDirection;
+    turntableSettings.speed = cfg.turntableSpeed;
+    turntableSettings.orthoEnabled = cfg.turntableOrthoEnabled;
+    turntableSettings.orthoLength = cfg.turntableOrthoLength;
+    turntableSettings.feedbackEnabled = cfg.turntableFeedbackEnabled;
+    m_ctrlDialog->applySettings(turntableSettings);
 
     QShortcut *shortcutF5 = new QShortcut(QKeySequence(Qt::Key_F5), this);
     connect(shortcutF5, &QShortcut::activated, this, &MainWindow::onClearUiClicked);
@@ -619,15 +603,14 @@ MainWindow::MainWindow(QWidget *parent) :
     m_cmdSocket = new QUdpSocket(this);
     m_replySocket = new QUdpSocket(this);
 
-    addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), u8s("\xE6\x8C\x87\xE4\xBB\xA4\xE6\x8E\xA7\xE5\x88\xB6\xE5\x87\x86\xE5\xA4\x87\xE5\xB0\xB1\xE7\xBB\xAA\xEF\xBC\x8C\xE7\x9B\xAE\xE6\xA0\x87\x3A\x20\x25\x31").arg(DEVICE_IP), "#569CD6");
+    addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), u8s("\xE6\x8C\x87\xE4\xBB\xA4\xE6\x8E\xA7\xE5\x88\xB6\xE5\x87\x86\xE5\xA4\x87\xE5\xB0\xB1\xE7\xBB\xAA\xEF\xBC\x8C\xE7\x9B\xAE\xE6\xA0\x87\x3A\x20\x25\x31").arg(cfg.deviceIp), "#569CD6");
 
-    // bind 5002
-    if (m_replySocket->bind(QHostAddress::AnyIPv4, CMD_PORT_REPLY, QUdpSocket::ShareAddress)) {
-        qDebug() << ">>> [UDP] bind 5002 ok";
-        addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), u8s("\xE6\x88\x90\xE5\x8A\x9F\xE7\xBB\x91\xE5\xAE\x9A\x20\x35\x30\x30\x32\x20\xE7\xAB\xAF\xE5\x8F\xA3\xEF\xBC\x8C\xE7\x9B\x91\xE5\x90\xAC\xE8\xAE\xBE\xE5\xA4\x87\xE5\xBA\x94\xE7\xAD\x94"), "#6A9955");
+    if (m_replySocket->bind(QHostAddress::AnyIPv4, cfg.cmdPortReply, QUdpSocket::ShareAddress)) {
+        qDebug() << ">>> [UDP] bind" << cfg.cmdPortReply << "ok";
+        addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), QStringLiteral("UDP reply bind %1 ok").arg(cfg.cmdPortReply), "#6A9955");
     } else {
-        qDebug() << ">>> [UDP] bind 5002 failed";
-        addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), u8s("\xE9\x94\x99\xE8\xAF\xAF\xEF\xBC\x9A\xE6\x97\xA0\xE6\xB3\x95\xE7\xBB\x91\xE5\xAE\x9A\x20\x35\x30\x30\x32\x20\xE7\xAB\xAF\xE5\x8F\xA3"), "#F44336");
+        qDebug() << ">>> [UDP] bind" << cfg.cmdPortReply << "failed";
+        addLog(u8s("\xE7\xB3\xBB\xE7\xBB\x9F"), QStringLiteral("UDP reply bind %1 failed").arg(cfg.cmdPortReply), "#F44336");
     }
 
     connect(m_replySocket, &QUdpSocket::readyRead, this, &MainWindow::onCommandReplyReceived);
@@ -753,10 +736,11 @@ void MainWindow::addLog(const QString &type, const QString &msg, const QString &
 
 void MainWindow::sendCommand(const QString &cmd)
 {
+    const AppConfig &cfg = AppConfig::instance();
     QByteArray data = cmd.toUtf8();
-    m_cmdSocket->writeDatagram(data, QHostAddress(DEVICE_IP), CMD_PORT_SEND);
-    qDebug() << ">>> [UDP TX] ->" << DEVICE_IP << ":" << CMD_PORT_SEND << "|" << cmd;
-    addLog(u8s("\xE6\x8C\x87\xE4\xBB\xA4\xE4\xB8\x8B\xE5\x8F\x91\x20\x28\x35\x30\x30\x31\x29"), cmd, "#569CD6");
+    m_cmdSocket->writeDatagram(data, QHostAddress(cfg.deviceIp), cfg.cmdPortSend);
+    qDebug() << ">>> [UDP TX] ->" << cfg.deviceIp << ":" << cfg.cmdPortSend << "|" << cmd;
+    addLog(QStringLiteral("CMD(%1)").arg(cfg.cmdPortSend), cmd, "#569CD6");
 }
 
 void MainWindow::onCommandReplyReceived()
@@ -897,7 +881,7 @@ void MainWindow::onToggleRecording()
     if (m_thermalThread) m_thermalThread->setRecordingEnabled(enable);
 
     if (enable) {
-        QMetaObject::invokeMethod(m_recordWorker, "startRecording", Qt::QueuedConnection, Q_ARG(QString, resolveRecordRoot()), Q_ARG(int, 10));
+        QMetaObject::invokeMethod(m_recordWorker, "startRecording", Qt::QueuedConnection, Q_ARG(QString, resolveRecordRoot()), Q_ARG(int, AppConfig::instance().recordRollMinutes));
         addLog(QStringLiteral("REC"), QStringLiteral("Start"), QStringLiteral("#569CD6"));
         return;
     }
@@ -919,6 +903,24 @@ double MainWindow::toRelativeAngle(double rawAngleDeg)
 void MainWindow::onActionOpenDevice()
 {
     sendCommand("TG_OPEN_DEVICE;");
+    QString turntableErr;
+    if (m_ctrlDialog && m_ctrlDialog->runWithCurrentSettings(&turntableErr)) {
+        const TurntableControlDialog::Settings s = m_ctrlDialog->currentSettings();
+        addLog(QStringLiteral("TURNTABLE"),
+               QStringLiteral("Run direction=%1 speed=%2 port=%3 baud=%4 ortho=%5 feedback=%6")
+                   .arg(s.direction)
+                   .arg(s.speed)
+                   .arg(s.serialPort.isEmpty() ? QStringLiteral("(none)") : s.serialPort)
+                   .arg(s.baudRate)
+                   .arg(s.orthoEnabled ? 1 : 0)
+                   .arg(s.feedbackEnabled ? 1 : 0),
+               QStringLiteral("#6A9955"));
+    } else if (!turntableErr.isEmpty()) {
+        addLog(QStringLiteral("TURNTABLE"), QStringLiteral("Auto run failed: %1").arg(turntableErr), QStringLiteral("#F44336"));
+        if (ui->statusbar) {
+            ui->statusbar->showMessage(QStringLiteral("Turntable not started: %1").arg(turntableErr), 5000);
+        }
+    }
     m_isDeviceOpen = true;
     updateUiState();
     ui->statusbar->showMessage(u8s("\xE6\xAD\xA3\xE5\x9C\xA8\xE5\x90\x91\xE8\xAE\xBE\xE5\xA4\x87\xE4\xB8\x8B\xE5\x8F\x91\xE4\xBD\xBF\xE8\x83\xBD\xE5\x91\xBD\xE4\xBB\xA4\x2E\x2E\x2E"), 2000);
@@ -993,10 +995,11 @@ void MainWindow::onSaveFullPanoramaClicked()
         addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), u8s("\xE5\x88\x9B\xE5\xBB\xBA\xE7\x9B\xAE\xE5\xBD\x95\xE5\xA4\xB1\xE8\xB4\xA5\x3A\x20") + outDir, "#F44336");
         return;
     }
-    const int rgbQuality = 95;
+    const int rgbQuality = AppConfig::instance().previewJpegQuality;
+    const int previewWidth = AppConfig::instance().previewWidth;
     addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), u8s("\xE5\xB7\xB2\xE5\x85\xA5\xE9\x98\x9F\x3A\x20") + outDir, "#569CD6");
     if (ui->statusbar) ui->statusbar->showMessage(u8s("\xE5\xB7\xB2\xE5\x85\xA5\xE9\x98\x9F\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE6\x99\xAF\x2E\x2E\x2E"), 2000);
-    emit savePanoramaRequested(outDir, rgbQuality);
+    emit savePanoramaRequested(outDir, rgbQuality, previewWidth);
 }
 
 void MainWindow::onSaveFullPanoramaFinished(quint64 saveId, bool ok, const QString &msg, const QString &outDir)

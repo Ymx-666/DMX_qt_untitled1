@@ -1,0 +1,72 @@
+{
+  "paths": {
+    "dataRoot": "",
+    "dataRoot_comment": "总数据根目录。为空时使用程序内置默认值；如果填写，saveRoot/recordRoot/logRoot 为空时会自动派生到 dataRoot 下。",
+    "saveRoot": "",
+    "saveRoot_comment": "手动保存全景图的根目录。为空时使用默认值或 dataRoot/saves。",
+    "recordRoot": "",
+    "recordRoot_comment": "开始录制时保存原始帧数据的根目录。为空时使用默认值或 dataRoot/recordings。",
+    "logRoot": "",
+    "logRoot_comment": "运行日志文件保存根目录。为空时使用默认值或 dataRoot/logs。",
+    "shareMount": "/mnt/dmx_share",
+    "shareMount_comment": "Linux 下把设备 /data 路径映射到本机共享盘挂载点，例如 /mnt/dmx_share。Windows 下通常不用改。"
+  },
+  "capture": {
+    "angleLookup": true,
+    "angleLookup_comment": "是否使用角度历史按接收时间回查角度。建议保持 true；false 时使用当前最新角度，拼接更容易错位。",
+    "latencyMs": 0,
+    "latencyMs_comment": "全局图像采集延迟补偿，单位毫秒。RGB/BW 单独配置存在时优先生效。",
+    "latencyRgbMs": 300,
+    "latencyRgbMs_comment": "彩色 RGB 图像延迟补偿，单位毫秒。4s/圈测试当前建议 300。",
+    "latencyBwMs": 200,
+    "latencyBwMs_comment": "黑白 BW 图像延迟补偿，单位毫秒。4s/圈测试当前建议 200。",
+    "uiDropStale": true,
+    "uiDropStale_comment": "UI/解码队列积压时是否丢弃旧帧，只保留最新帧显示。录制原始帧不受影响。建议 true。",
+    "uiQueueCap": 2,
+    "uiQueueCap_comment": "触发 UI 丢旧帧的队列阈值。值越小实时性越好，值越大越少丢 UI 帧但延迟更高。"
+  },
+  "panorama": {
+    "fullWidth": 65536,
+    "fullWidth_comment": "无损全景图宽度。16 帧 4096 宽拼接时应为 65536。",
+    "fullHeight": 4096,
+    "fullHeight_comment": "无损全景图高度。当前设备帧高为 4096。",
+    "thumbWidth": 8192,
+    "thumbWidth_comment": "界面上方全景缩略条宽度，影响显示缓存，不影响无损全图尺寸。",
+    "thumbHeight": 240,
+    "thumbHeight_comment": "界面上方全景缩略条高度，影响显示缓存，不影响无损全图尺寸。",
+    "previewWidth": 8192,
+    "previewWidth_comment": "保存全图时额外生成 preview.jpg 的宽度。只是快速查看用，不影响 bmp 无损全图。",
+    "previewJpegQuality": 95,
+    "previewJpegQuality_comment": "preview.jpg 的 JPEG 质量，范围 1-100。只影响预览图，不影响无损 bmp。",
+    "saveRawTiles": false,
+    "saveRawTiles_comment": "保存全图时是否额外复制参与拼接的原始 tile 文件。会明显增加保存时间和占用，默认 false。"
+  },
+  "recording": {
+    "rollMinutes": 10,
+    "rollMinutes_comment": "原始帧录制分卷时间，单位分钟。录制功能仍保存原始帧数据，不保存无损全图快照。"
+  },
+  "device": {
+    "ip": "192.168.4.1",
+    "ip_comment": "设备 UDP 控制目标 IP。",
+    "cmdPortSend": 5001,
+    "cmdPortSend_comment": "向设备下发命令的 UDP 端口。",
+    "cmdPortReply": 5002,
+    "cmdPortReply_comment": "本机监听设备命令回复的 UDP 端口。"
+  },
+  "turntable": {
+    "serialPort": "",
+    "serialPort_comment": "转台串口号，例如 Windows 上 COM7，Linux 上 /dev/ttyUSB0。为空时使用转台控制界面当前选择。",
+    "baudRate": 9600,
+    "baudRate_comment": "转台串口波特率。当前驱动默认 9600。",
+    "direction": "right",
+    "direction_comment": "设备运行按钮自动启动转台时的默认方向，可填 right 或 left。",
+    "speed": 85,
+    "speed_comment": "转台速度指令值。85 约等于 4s/圈；43 约等于 8s/圈；170 约等于 2s/圈。",
+    "orthoEnabled": false,
+    "orthoEnabled_comment": "设备运行按钮启动转台前是否打开正交模式。",
+    "orthoLength": 4096,
+    "orthoLength_comment": "正交模式包长。常用值 256、512、1024、2048、4096。",
+    "feedbackEnabled": true,
+    "feedbackEnabled_comment": "设备运行按钮启动转台前是否打开角度回传。角度回查和拼接建议保持 true。"
+  }
+}
