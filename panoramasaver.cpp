@@ -18,14 +18,14 @@ PanoramaSaver::PanoramaSaver(QSharedPointer<PanoramaCache> cache, QObject *paren
 {
 }
 
-void PanoramaSaver::enqueueSave(QString outDir, int rgbJpegQuality, int previewMaxWidth)
+void PanoramaSaver::enqueueSave(QString outDir, int previewJpegQuality, int previewMaxWidth)
 {
     Job j;
     {
         QMutexLocker lk(&m_mtx);
         j.id = m_nextId++;
         j.outDir = std::move(outDir);
-        j.rgbJpegQuality = rgbJpegQuality;
+        j.previewJpegQuality = previewJpegQuality;
         j.previewMaxWidth = previewMaxWidth;
         m_jobs.enqueue(j);
     }
@@ -321,12 +321,12 @@ void PanoramaSaver::process()
     if (previewW > 0 && previewH > 0 && previewW < saveW) {
         QImage rgbPreview = rgbCombined.scaled(previewW, previewH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         const QString rgbPreviewPath = QDir(job.outDir).filePath(QStringLiteral("rgb_preview.jpg"));
-        if (writeImageFile(rgbPreviewPath, rgbPreview, "jpg", job.rgbJpegQuality, &err))
+        if (writeImageFile(rgbPreviewPath, rgbPreview, "jpg", job.previewJpegQuality, &err))
             rgbPreviewBytes = QFileInfo(rgbPreviewPath).size();
 
         QImage bwPreview = bwCombined.scaled(previewW, previewH, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
         const QString bwPreviewPath = QDir(job.outDir).filePath(QStringLiteral("bw_preview.jpg"));
-        if (writeImageFile(bwPreviewPath, bwPreview, "jpg", job.rgbJpegQuality, &err))
+        if (writeImageFile(bwPreviewPath, bwPreview, "jpg", job.previewJpegQuality, &err))
             bwPreviewBytes = QFileInfo(bwPreviewPath).size();
     }
 

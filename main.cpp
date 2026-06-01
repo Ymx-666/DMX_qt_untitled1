@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QFont>
 #include <QFontDatabase>
+#include "appconfig.h"
 
 int main(int argc, char *argv[])
 {
@@ -36,6 +37,7 @@ int main(int argc, char *argv[])
             qss.close();
         }
     }
+    AppConfig::instance();
     MainWindow w;
     w.show();
     return a.exec();

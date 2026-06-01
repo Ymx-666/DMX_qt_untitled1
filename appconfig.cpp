@@ -296,10 +296,10 @@ AppConfig::AppConfig()
       turntableFeedbackEnabled(true)
 {
 #ifdef Q_OS_WIN
-    dataRoot = QStringLiteral("E:/.trae/program/DMX_qt/untitled1/data");
-    saveRoot = QStringLiteral("E:/.trae/program/DMX_qt/untitled1/data/SAVES");
+    dataRoot = QDir::cleanPath(QDir(QCoreApplication::applicationDirPath()).absoluteFilePath(QStringLiteral("../data")));
+    saveRoot = QDir(dataRoot).filePath(QStringLiteral("SAVES"));
     recordRoot = QStringLiteral("D:/DMX_data");
-    logRoot = QStringLiteral("E:/.trae/program/DMX_qt/untitled1/data/logs");
+    logRoot = QDir(dataRoot).filePath(QStringLiteral("logs"));
     shareMount = QStringLiteral("/mnt/dmx_share");
 #else
     dataRoot = QStringLiteral("/media/sht/6C3CCFC13CCF8494/data");

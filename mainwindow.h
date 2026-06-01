@@ -178,7 +178,7 @@ private slots:
     void addLog(const QString &type, const QString &msg, const QString &color);
 
 signals:
-    void savePanoramaRequested(const QString &outDir, int rgbJpegQuality, int previewMaxWidth);
+    void savePanoramaRequested(const QString &outDir, int previewJpegQuality, int previewMaxWidth);
 
 private:
     void createToolBar();

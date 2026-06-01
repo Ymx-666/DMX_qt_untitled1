@@ -8,6 +8,19 @@ class AppConfigTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void defaultWindowsPathsDoNotUseOldProjectName()
+    {
+#ifdef Q_OS_WIN
+        const AppConfig cfg = AppConfig::loadFile(QString(), false);
+        QVERIFY(!cfg.dataRoot.contains(QStringLiteral("untitled1")));
+        QVERIFY(!cfg.saveRoot.contains(QStringLiteral("untitled1")));
+        QVERIFY(!cfg.logRoot.contains(QStringLiteral("untitled1")));
+        QVERIFY(cfg.dataRoot.contains(QStringLiteral("DMX")));
+        QVERIFY(cfg.saveRoot.contains(QStringLiteral("DMX")));
+        QVERIFY(cfg.logRoot.contains(QStringLiteral("DMX")));
+#endif
+    }
+
     void jsonValuesOverrideDefaults()
     {
         QTemporaryDir dir;
@@ -97,4 +110,3 @@ private slots:
 
 QTEST_MAIN(AppConfigTests)
 #include "appconfig_tests.moc"
-

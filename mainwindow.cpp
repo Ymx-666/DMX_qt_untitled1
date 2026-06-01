@@ -995,11 +995,11 @@ void MainWindow::onSaveFullPanoramaClicked()
         addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), u8s("\xE5\x88\x9B\xE5\xBB\xBA\xE7\x9B\xAE\xE5\xBD\x95\xE5\xA4\xB1\xE8\xB4\xA5\x3A\x20") + outDir, "#F44336");
         return;
     }
-    const int rgbQuality = AppConfig::instance().previewJpegQuality;
+    const int previewJpegQuality = AppConfig::instance().previewJpegQuality;
     const int previewWidth = AppConfig::instance().previewWidth;
     addLog(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), u8s("\xE5\xB7\xB2\xE5\x85\xA5\xE9\x98\x9F\x3A\x20") + outDir, "#569CD6");
     if (ui->statusbar) ui->statusbar->showMessage(u8s("\xE5\xB7\xB2\xE5\x85\xA5\xE9\x98\x9F\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE6\x99\xAF\x2E\x2E\x2E"), 2000);
-    emit savePanoramaRequested(outDir, rgbQuality, previewWidth);
+    emit savePanoramaRequested(outDir, previewJpegQuality, previewWidth);
 }
 
 void MainWindow::onSaveFullPanoramaFinished(quint64 saveId, bool ok, const QString &msg, const QString &outDir)
@@ -1016,9 +1016,10 @@ void MainWindow::onSaveFullPanoramaFinished(quint64 saveId, bool ok, const QStri
 void MainWindow::onClearUiClicked()
 {
     {
-        QImage rgb(8192, 240, QImage::Format_RGB32);
+        const AppConfig &cfg = AppConfig::instance();
+        QImage rgb(cfg.thumbWidth, cfg.thumbHeight, QImage::Format_RGB32);
         rgb.fill(Qt::black);
-        QImage bw(8192, 240, QImage::Format_RGB32);
+        QImage bw(cfg.thumbWidth, cfg.thumbHeight, QImage::Format_RGB32);
         bw.fill(Qt::black);
         m_uiThumbRgb = rgb;
         m_uiThumbBw = bw;

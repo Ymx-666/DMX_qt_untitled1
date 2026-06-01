@@ -90,8 +90,6 @@ public:
 
     BlockState state(BlockId id) const;
 
-    bool saveFullPanoramaBmp(const QString &rgbPath, const QString &bwPath, QString *errMsg) const;
-
 private:
     struct Stream {
         mutable QReadWriteLock lock;
