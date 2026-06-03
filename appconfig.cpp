@@ -291,7 +291,7 @@ AppConfig::AppConfig()
       turntableBaudRate(9600),
       turntableDirection(QStringLiteral("right")),
       turntableSpeed(85),
-      turntableOrthoEnabled(false),
+      turntableOrthoEnabled(true),
       turntableOrthoLength(4096),
       turntableFeedbackEnabled(true)
 {
@@ -347,5 +347,8 @@ AppConfig AppConfig::loadFile(const QString &path, bool applyEnvironmentFlag)
         applyEnvironment(&cfg);
     }
     cfg.turntableDirection = normalizeDirection(cfg.turntableDirection);
+    // The turntable only streams continuous angle packets while orthogonal output
+    // is enabled, so runtime capture must never allow this to be disabled.
+    cfg.turntableOrthoEnabled = true;
     return cfg;
 }

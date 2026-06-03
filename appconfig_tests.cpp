@@ -106,6 +106,24 @@ private slots:
         qunsetenv("DMX_TURNTABLE_DIRECTION");
         qunsetenv("DMX_TURNTABLE_SPEED");
     }
+
+    void turntableOrthoCannotBeDisabled()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.path() + QStringLiteral("/dmx_config.json");
+
+        QFile f(path);
+        QVERIFY(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write("{\"turntable\":{\"orthoEnabled\":false}}");
+        f.close();
+
+        qputenv("DMX_TURNTABLE_ORTHO", "0");
+        const AppConfig cfg = AppConfig::loadFile(path, true);
+
+        QCOMPARE(cfg.turntableOrthoEnabled, true);
+        qunsetenv("DMX_TURNTABLE_ORTHO");
+    }
 };
 
 QTEST_MAIN(AppConfigTests)

@@ -25,10 +25,15 @@ static void setComboByText(QComboBox *combo, const QString &text)
     if (idx >= 0) combo->setCurrentIndex(idx);
 }
 
+static QString zh(const char *text)
+{
+    return QString::fromUtf8(text);
+}
+
 TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget *parent)
     : QDialog(parent), m_driver(driver)
 {
-    this->setWindowTitle("Turntable Control");
+    this->setWindowTitle(zh("转台控制"));
     this->resize(420, 430);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
@@ -42,35 +47,35 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
     cmbBaudRate->addItem("38400", 38400);
     cmbBaudRate->addItem("57600", 57600);
     cmbBaudRate->addItem("115200", 115200);
-    btnOpenSerial = new QPushButton("Open COM", this);
-    laySerial->addWidget(new QLabel("COM:", this));
+    btnOpenSerial = new QPushButton(zh("打开串口"), this);
+    laySerial->addWidget(new QLabel(zh("串口:"), this));
     laySerial->addWidget(cmbPorts);
-    laySerial->addWidget(new QLabel("Baud:", this));
+    laySerial->addWidget(new QLabel(zh("波特率:"), this));
     laySerial->addWidget(cmbBaudRate);
     laySerial->addWidget(btnOpenSerial);
     mainLayout->addLayout(laySerial);
 
     QGridLayout *layMove = new QGridLayout();
     cmbDirection = new QComboBox(this);
-    cmbDirection->addItem("Right", "right");
-    cmbDirection->addItem("Left", "left");
+    cmbDirection->addItem(zh("右转"), "right");
+    cmbDirection->addItem(zh("左转"), "left");
 
     cmbSpeed = new QComboBox(this);
-    cmbSpeed->addItem("Fast (~1.32s/lap)", 255);
-    cmbSpeed->addItem("2s / lap", 170);
-    cmbSpeed->addItem("4s / lap", 85);
-    cmbSpeed->addItem("6s / lap", 57);
-    cmbSpeed->addItem("8s / lap", 43);
+    cmbSpeed->addItem(zh("最快（约1.32秒/圈）"), 255);
+    cmbSpeed->addItem(zh("2秒/圈"), 170);
+    cmbSpeed->addItem(zh("4秒/圈"), 85);
+    cmbSpeed->addItem(zh("6秒/圈"), 57);
+    cmbSpeed->addItem(zh("8秒/圈"), 43);
     cmbSpeed->setCurrentIndex(2);
 
-    btnLeft = new QPushButton("Left", this);
-    btnRight = new QPushButton("Right", this);
-    btnStop = new QPushButton("STOP", this);
+    btnLeft = new QPushButton(zh("左转"), this);
+    btnRight = new QPushButton(zh("右转"), this);
+    btnStop = new QPushButton(zh("停止"), this);
     btnStop->setStyleSheet("background-color: #ffcccc; font-weight: bold;");
 
-    layMove->addWidget(new QLabel("Direction:"), 0, 0);
+    layMove->addWidget(new QLabel(zh("方向:"), this), 0, 0);
     layMove->addWidget(cmbDirection, 0, 1, 1, 2);
-    layMove->addWidget(new QLabel("Speed:"), 1, 0);
+    layMove->addWidget(new QLabel(zh("速度:"), this), 1, 0);
     layMove->addWidget(cmbSpeed, 1, 1, 1, 2);
     layMove->addWidget(btnLeft, 2, 0);
     layMove->addWidget(btnStop, 2, 1);
@@ -78,18 +83,21 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
     mainLayout->addLayout(layMove);
 
     QGridLayout *layAdvanced = new QGridLayout();
-    btnEnableOrtho = new QPushButton("Ortho ON", this);
-    btnDisableOrtho = new QPushButton("Ortho OFF", this);
+    btnEnableOrtho = new QPushButton(zh("开启正交输出"), this);
+    btnDisableOrtho = new QPushButton(zh("正交输出保持开启"), this);
+    btnDisableOrtho->setEnabled(false);
     cmbOrthoLength = new QComboBox(this);
     cmbOrthoLength->addItems({"256", "512", "1024", "2048", "4096"});
-    chkOrthoEnabled = new QCheckBox("Use Ortho", this);
-    btnSetLength = new QPushButton("Set Pack Len", this);
+    chkOrthoEnabled = new QCheckBox(zh("正交输出已开启"), this);
+    chkOrthoEnabled->setChecked(true);
+    chkOrthoEnabled->setEnabled(false);
+    btnSetLength = new QPushButton(zh("设置正交包长"), this);
 
-    btnEnableFeedback = new QPushButton("Feedback ON", this);
+    btnEnableFeedback = new QPushButton(zh("开启角度回传"), this);
     btnEnableFeedback->setStyleSheet("color: green;");
-    btnDisableFeedback = new QPushButton("Feedback OFF", this);
+    btnDisableFeedback = new QPushButton(zh("关闭角度回传"), this);
     btnDisableFeedback->setStyleSheet("color: red;");
-    chkFeedbackEnabled = new QCheckBox("Use Feedback", this);
+    chkFeedbackEnabled = new QCheckBox(zh("启用角度回传"), this);
 
     layAdvanced->addWidget(btnEnableOrtho, 0, 0);
     layAdvanced->addWidget(btnDisableOrtho, 0, 1);
@@ -106,12 +114,12 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
         QCoreApplication::processEvents();
         if (m_driver->isOpen()) {
             m_driver->closePort();
-            btnOpenSerial->setText("Open COM");
+            btnOpenSerial->setText(zh("打开串口"));
         } else {
             if (m_driver->openPort(cmbPorts->currentText(), cmbBaudRate->currentData().toInt())) {
-                btnOpenSerial->setText("Close COM");
+                btnOpenSerial->setText(zh("关闭串口"));
             } else {
-                QMessageBox::warning(this, "Error", "Open COM failed");
+                QMessageBox::warning(this, zh("错误"), zh("打开串口失败"));
             }
         }
         btnOpenSerial->setEnabled(true);
@@ -132,8 +140,8 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
         m_driver->enableOrtho();
     });
     connect(btnDisableOrtho, &QPushButton::clicked, this, [=]() {
-        chkOrthoEnabled->setChecked(false);
-        m_driver->disableOrtho();
+        chkOrthoEnabled->setChecked(true);
+        m_driver->enableOrtho();
     });
     connect(btnSetLength, &QPushButton::clicked, this, [=]() {
         m_driver->setOrthoLength(cmbOrthoLength->currentText().toInt());
@@ -168,7 +176,8 @@ void TurntableControlDialog::applySettings(const TurntableControlDialog::Setting
         cmbOrthoLength->addItem(QString::number(settings.orthoLength));
     }
     setComboByText(cmbOrthoLength, QString::number(settings.orthoLength));
-    chkOrthoEnabled->setChecked(settings.orthoEnabled);
+    Q_UNUSED(settings.orthoEnabled);
+    chkOrthoEnabled->setChecked(true);
     chkFeedbackEnabled->setChecked(settings.feedbackEnabled);
 }
 
@@ -202,7 +211,7 @@ TurntableControlDialog::Settings TurntableControlDialog::currentSettings() const
     s.direction = cmbDirection->currentData().toString().trimmed().toLower();
     if (s.direction != QStringLiteral("left")) s.direction = QStringLiteral("right");
     s.speed = cmbSpeed->currentData().toInt();
-    s.orthoEnabled = chkOrthoEnabled->isChecked();
+    s.orthoEnabled = true;
     s.orthoLength = cmbOrthoLength->currentText().toInt();
     s.feedbackEnabled = chkFeedbackEnabled->isChecked();
     return s;
@@ -211,7 +220,7 @@ TurntableControlDialog::Settings TurntableControlDialog::currentSettings() const
 bool TurntableControlDialog::runWithCurrentSettings(QString *errMsg)
 {
     if (!m_driver) {
-        if (errMsg) *errMsg = QStringLiteral("Turntable driver is not ready");
+        if (errMsg) *errMsg = zh("转台驱动未就绪");
         return false;
     }
 
@@ -219,20 +228,20 @@ bool TurntableControlDialog::runWithCurrentSettings(QString *errMsg)
     const Settings s = currentSettings();
     if (!m_driver->isOpen()) {
         if (s.serialPort.isEmpty()) {
-            if (errMsg) *errMsg = QStringLiteral("No serial port selected");
+            if (errMsg) *errMsg = zh("未选择串口");
             return false;
         }
         if (!m_driver->openPort(s.serialPort, s.baudRate)) {
-            if (errMsg) *errMsg = QStringLiteral("Open COM failed: %1").arg(s.serialPort);
+            if (errMsg) *errMsg = zh("打开串口失败: %1").arg(s.serialPort);
             return false;
         }
-        btnOpenSerial->setText("Close COM");
+        btnOpenSerial->setText(zh("关闭串口"));
         QCoreApplication::processEvents();
         QThread::msleep(120);
     }
 
-    if (s.orthoEnabled) m_driver->enableOrtho();
-    else m_driver->disableOrtho();
+    chkOrthoEnabled->setChecked(true);
+    m_driver->enableOrtho();
     QThread::msleep(40);
     m_driver->setOrthoLength(s.orthoLength);
     QThread::msleep(40);

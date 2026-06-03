@@ -422,7 +422,7 @@ MainWindow::MainWindow(QWidget *parent) :
     m_angleLabel->setAlignment(Qt::AlignRight | Qt::AlignTop);
     m_angleLabel->setStyleSheet("color: #00FF00; font-family: 'Monospace'; font-size: 18px; font-weight: bold; background-color: rgba(0,0,0,120); padding: 4px; border-radius: 4px;");
 
-    m_lapTimeLabel = new QLabel("Lap: -- s", radarView);
+    m_lapTimeLabel = new QLabel(u8s("圈速: -- 秒"), radarView);
     m_lapTimeLabel->setAlignment(Qt::AlignRight | Qt::AlignTop);
     m_lapTimeLabel->setStyleSheet("color: #FFA500; font-family: 'Monospace'; font-size: 14px; font-weight: bold; background-color: rgba(0,0,0,120); padding: 4px; border-radius: 4px;");
 
@@ -596,7 +596,7 @@ MainWindow::MainWindow(QWidget *parent) :
     });
 
     connect(m_driver, &TurntableDriver::lapTimeMeasured, this, [=](double lapTime){
-        m_lapTimeLabel->setText(QString("Lap: %1 s").arg(lapTime, 0, 'f', 2));
+        m_lapTimeLabel->setText(u8s("圈速: %1 秒").arg(lapTime, 0, 'f', 2));
     });
 
     // ====================================================================
@@ -906,19 +906,20 @@ void MainWindow::onActionOpenDevice()
     QString turntableErr;
     if (m_ctrlDialog && m_ctrlDialog->runWithCurrentSettings(&turntableErr)) {
         const TurntableControlDialog::Settings s = m_ctrlDialog->currentSettings();
+        const QString directionText = (s.direction == QStringLiteral("left")) ? u8s("左转") : u8s("右转");
         addLog(QStringLiteral("TURNTABLE"),
-               QStringLiteral("Run direction=%1 speed=%2 port=%3 baud=%4 ortho=%5 feedback=%6")
-                   .arg(s.direction)
+               u8s("运行 方向=%1 速度=%2 串口=%3 波特率=%4 正交输出=%5 角度回传=%6")
+                   .arg(directionText)
                    .arg(s.speed)
-                   .arg(s.serialPort.isEmpty() ? QStringLiteral("(none)") : s.serialPort)
+                   .arg(s.serialPort.isEmpty() ? u8s("(未选择)") : s.serialPort)
                    .arg(s.baudRate)
                    .arg(s.orthoEnabled ? 1 : 0)
                    .arg(s.feedbackEnabled ? 1 : 0),
                QStringLiteral("#6A9955"));
     } else if (!turntableErr.isEmpty()) {
-        addLog(QStringLiteral("TURNTABLE"), QStringLiteral("Auto run failed: %1").arg(turntableErr), QStringLiteral("#F44336"));
+        addLog(QStringLiteral("TURNTABLE"), u8s("自动启动失败: %1").arg(turntableErr), QStringLiteral("#F44336"));
         if (ui->statusbar) {
-            ui->statusbar->showMessage(QStringLiteral("Turntable not started: %1").arg(turntableErr), 5000);
+            ui->statusbar->showMessage(u8s("转台未启动: %1").arg(turntableErr), 5000);
         }
     }
     m_isDeviceOpen = true;

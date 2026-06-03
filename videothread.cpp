@@ -886,11 +886,12 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
     m_lastRxType = t;
     m_lastRxPath = p;
 
-    const qint64 nowMs = (job.rxMs > 0) ? job.rxMs : QDateTime::currentMSecsSinceEpoch();
-    if (job.firstSeenMs <= 0) job.firstSeenMs = nowMs;
+    const qint64 wallMs = QDateTime::currentMSecsSinceEpoch();
+    const qint64 rxMs = (job.rxMs > 0) ? job.rxMs : wallMs;
+    if (job.firstSeenMs <= 0) job.firstSeenMs = wallMs;
 
     if (m_type == 2) {
-        emit pathReceived(t, p, job.sender, nowMs);
+        emit pathReceived(t, p, job.sender, rxMs);
         return true;
     }
 
@@ -914,7 +915,7 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
         ++m_totalRxPackets;
         if (hasIdx) {
             const QString subType = (t == "GRAY") ? "BW" : t;
-            updateSeqState(subType, fileIdx, winPath0, nowMs);
+            updateSeqState(subType, fileIdx, winPath0, rxMs);
         }
     }
     const quint64 cacheFileIdx = hasIdx ? fileIdx : 0;
@@ -932,13 +933,13 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
     job.lastSize = sz;
     const qint64 maxWaitMs = 8000;
     if (!stable) {
-        if ((nowMs - job.firstSeenMs) < maxWaitMs) {
+        if ((wallMs - job.firstSeenMs) < maxWaitMs) {
             if (retryMs) *retryMs = 25;
             return false;
         }
         ++m_totalReadFails;
         const QString detail = QStringLiteral("NOT_READY: %1 exist=%2 size=%3").arg(usedPath).arg(exists ? 1 : 0).arg(sz);
-        noteReadFail(t, detail, senderIp, nowMs);
+        noteReadFail(t, detail, senderIp, wallMs);
         return true;
     }
 
@@ -950,7 +951,7 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
             QFile f(usedPath);
             if (!f.open(QIODevice::ReadOnly)) {
                 ++job.tries;
-                if ((nowMs - job.firstSeenMs) < maxWaitMs && job.tries < 40) {
+                if ((wallMs - job.firstSeenMs) < maxWaitMs && job.tries < 40) {
                     if (retryMs) *retryMs = 30;
                     return false;
                 }
@@ -1001,12 +1002,12 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
     }
     if (loaded.isNull()) {
         ++job.tries;
-        if ((nowMs - job.firstSeenMs) < maxWaitMs && job.tries < 40) {
+        if ((wallMs - job.firstSeenMs) < maxWaitMs && job.tries < 40) {
             if (retryMs) *retryMs = 30;
             return false;
         }
         ++m_totalReadFails;
-        noteReadFail(t, QStringLiteral("DECODE_FAIL: %1 err=%2").arg(usedPath, decErr), senderIp, nowMs);
+        noteReadFail(t, QStringLiteral("DECODE_FAIL: %1 err=%2").arg(usedPath, decErr), senderIp, wallMs);
         return true;
     }
 
@@ -1019,7 +1020,7 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
             Qt::QueuedConnection,
             Q_ARG(QString, subType),
             Q_ARG(quint64, cacheFileIdx),
-            Q_ARG(qint64, nowMs),
+            Q_ARG(qint64, rxMs),
             Q_ARG(QString, usedPath),
             Q_ARG(QString, job.sender),
             Q_ARG(QString, ext),
@@ -1031,18 +1032,18 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
         QImage bwFull = loaded;
         if (bwFull.isNull() || bwFull.format() != QImage::Format_RGB32) {
             ++m_totalReadFails;
-            noteReadFail(QStringLiteral("BW"), QStringLiteral("toRGB failed: %1").arg(usedPath), senderIp, nowMs);
+            noteReadFail(QStringLiteral("BW"), QStringLiteral("toRGB failed: %1").arg(usedPath), senderIp, wallMs);
             return true;
         }
         bwFull = rotateCCW90(bwFull, true);
         if (bwFull.isNull()) {
             ++m_totalReadFails;
-            noteReadFail(QStringLiteral("BW"), QStringLiteral("rotate failed: %1").arg(usedPath), senderIp, nowMs);
+            noteReadFail(QStringLiteral("BW"), QStringLiteral("rotate failed: %1").arg(usedPath), senderIp, wallMs);
             return true;
         }
 
         if (m_cache) {
-            m_cache->pushBwFrame(bwFull, cacheFileIdx, usedPath, job.rxMs, job.angleDeg);
+            m_cache->pushBwFrame(bwFull, cacheFileIdx, usedPath, rxMs, job.angleDeg);
             emit cacheUpdated();
         }
         ++m_totalDecodedFrames;
@@ -1058,18 +1059,18 @@ bool VideoWorker::handlePathInternal(VideoWorker::PathJob &job, int *retryMs)
     QImage rgbFull = loaded.convertToFormat(QImage::Format_RGB32);
     if (rgbFull.isNull()) {
         ++m_totalReadFails;
-        noteReadFail(QStringLiteral("RGB"), QStringLiteral("toRGB failed: %1").arg(usedPath), senderIp, nowMs);
+        noteReadFail(QStringLiteral("RGB"), QStringLiteral("toRGB failed: %1").arg(usedPath), senderIp, wallMs);
         return true;
     }
     rgbFull = rotateCCW90(rgbFull, true);
     if (rgbFull.isNull()) {
         ++m_totalReadFails;
-        noteReadFail(QStringLiteral("RGB"), QStringLiteral("rotate failed: %1").arg(usedPath), senderIp, nowMs);
+        noteReadFail(QStringLiteral("RGB"), QStringLiteral("rotate failed: %1").arg(usedPath), senderIp, wallMs);
         return true;
     }
 
     if (m_cache) {
-        m_cache->pushRgbFrame(rgbFull, cacheFileIdx, usedPath, job.rxMs, job.angleDeg);
+        m_cache->pushRgbFrame(rgbFull, cacheFileIdx, usedPath, rxMs, job.angleDeg);
         emit cacheUpdated();
     }
     ++m_totalDecodedFrames;
