@@ -233,6 +233,7 @@ private:
     bool m_panoBwDirty = false;
 
     bool m_isDeviceOpen;
+    bool m_waitingForRunAngle = false;
     double m_latestAngle;
     double m_prevCheckAngle;
     QVector<RadarTarget> m_simTargets;

@@ -13,6 +13,13 @@
 #include <QJsonObject>
 #include <QJsonArray>
 
+#ifndef Q_OS_WIN
+#include <opencv2/core.hpp>
+#include <opencv2/imgcodecs.hpp>
+#endif
+
+#include <vector>
+
 PanoramaSaver::PanoramaSaver(QSharedPointer<PanoramaCache> cache, QObject *parent)
     : QObject(parent), m_cache(std::move(cache))
 {
@@ -100,6 +107,71 @@ static bool writeBmp32Lossless(const QString &path, const QImage &img, QString *
         }
     }
     return true;
+}
+
+#ifndef Q_OS_WIN
+static bool writeTiffLzwLossless(const QString &path, const QImage &img, QString *err)
+{
+    if (img.isNull() || img.format() != QImage::Format_RGB32) {
+        if (err) *err = QStringLiteral("Invalid RGB32 image");
+        return false;
+    }
+
+    const cv::Mat bgra(img.height(), img.width(), CV_8UC4,
+                       const_cast<uchar*>(img.constBits()),
+                       static_cast<size_t>(img.bytesPerLine()));
+    std::vector<int> params;
+    params.push_back(cv::IMWRITE_TIFF_COMPRESSION);
+    params.push_back(5); // TIFF LZW, lossless.
+
+    try {
+        const QByteArray nativePath = QFile::encodeName(path);
+        if (!cv::imwrite(nativePath.constData(), bgra, params)) {
+            if (err) *err = QStringLiteral("OpenCV imwrite returned false: %1").arg(path);
+            return false;
+        }
+    } catch (const cv::Exception &e) {
+        if (err) *err = QString::fromLocal8Bit(e.what());
+        return false;
+    }
+    return true;
+}
+#endif
+
+static QString losslessFileName(const QString &streamName)
+{
+#ifdef Q_OS_WIN
+    return streamName + QStringLiteral("_lossless.bmp");
+#else
+    return streamName + QStringLiteral("_lossless.tiff");
+#endif
+}
+
+static QString losslessFormatName()
+{
+#ifdef Q_OS_WIN
+    return QStringLiteral("bmp32");
+#else
+    return QStringLiteral("tiff-lzw-bgra");
+#endif
+}
+
+static QString losslessLogName()
+{
+#ifdef Q_OS_WIN
+    return QStringLiteral("BMP");
+#else
+    return QStringLiteral("TIFF-LZW");
+#endif
+}
+
+static bool writeLosslessPanorama(const QString &path, const QImage &img, QString *err)
+{
+#ifdef Q_OS_WIN
+    return writeBmp32Lossless(path, img, err);
+#else
+    return writeTiffLzwLossless(path, img, err);
+#endif
 }
 
 static bool readAllBytes(const QString &path, QByteArray *out, QString *err)
@@ -292,9 +364,10 @@ void PanoramaSaver::process()
     QString err;
 
     const qint64 rgbWriteStart = QDateTime::currentMSecsSinceEpoch();
-    const QString rgbPath = QDir(job.outDir).filePath(QStringLiteral("rgb_lossless.bmp"));
-    if (!writeBmp32Lossless(rgbPath, rgbCombined, &err)) {
-        emit saveFinished(job.id, false, QStringLiteral("RGB BMP write failed: %1").arg(err), job.outDir);
+    const QString rgbFileName = losslessFileName(QStringLiteral("rgb"));
+    const QString rgbPath = QDir(job.outDir).filePath(rgbFileName);
+    if (!writeLosslessPanorama(rgbPath, rgbCombined, &err)) {
+        emit saveFinished(job.id, false, QStringLiteral("RGB lossless write failed: %1").arg(err), job.outDir);
         schedule();
         return;
     }
@@ -302,17 +375,18 @@ void PanoramaSaver::process()
     const qint64 rgbWriteMs = QDateTime::currentMSecsSinceEpoch() - rgbWriteStart;
 
     const qint64 bwWriteStart = QDateTime::currentMSecsSinceEpoch();
-    const QString bwPath = QDir(job.outDir).filePath(QStringLiteral("bw_lossless.bmp"));
-    if (!writeBmp32Lossless(bwPath, bwCombined, &err)) {
-        emit saveFinished(job.id, false, QStringLiteral("BW BMP write failed: %1").arg(err), job.outDir);
+    const QString bwFileName = losslessFileName(QStringLiteral("bw"));
+    const QString bwPath = QDir(job.outDir).filePath(bwFileName);
+    if (!writeLosslessPanorama(bwPath, bwCombined, &err)) {
+        emit saveFinished(job.id, false, QStringLiteral("BW lossless write failed: %1").arg(err), job.outDir);
         schedule();
         return;
     }
     const qint64 bwBytes = QFileInfo(bwPath).size();
     const qint64 bwWriteMs = QDateTime::currentMSecsSinceEpoch() - bwWriteStart;
 
-    // Keep small JPEG previews for fast viewing; full-size outputs are BMP and
-    // stay lossless at the complete panorama dimensions.
+    // Keep small JPEG previews for fast viewing; full-size outputs stay
+    // lossless at the complete panorama dimensions.
     const int previewLimit = qBound(512, job.previewMaxWidth, 65535);
     const int previewW = qMin(saveW, previewLimit);
     const int previewH = (saveW > 0) ? (int)((qint64)saveH * previewW / saveW) : saveH;
@@ -342,9 +416,9 @@ void PanoramaSaver::process()
     root.insert(QStringLiteral("previewH"), previewH);
 
     QJsonObject rgbObj;
-    rgbObj.insert(QStringLiteral("file"), QStringLiteral("rgb_lossless.bmp"));
+    rgbObj.insert(QStringLiteral("file"), rgbFileName);
     rgbObj.insert(QStringLiteral("preview"), QStringLiteral("rgb_preview.jpg"));
-    rgbObj.insert(QStringLiteral("format"), QStringLiteral("bmp32"));
+    rgbObj.insert(QStringLiteral("format"), losslessFormatName());
     rgbObj.insert(QStringLiteral("lossless"), true);
     rgbObj.insert(QStringLiteral("bytes"), rgbBytes);
     rgbObj.insert(QStringLiteral("previewBytes"), rgbPreviewBytes);
@@ -352,9 +426,9 @@ void PanoramaSaver::process()
     root.insert(QStringLiteral("rgb"), rgbObj);
 
     QJsonObject bwObj;
-    bwObj.insert(QStringLiteral("file"), QStringLiteral("bw_lossless.bmp"));
+    bwObj.insert(QStringLiteral("file"), bwFileName);
     bwObj.insert(QStringLiteral("preview"), QStringLiteral("bw_preview.jpg"));
-    bwObj.insert(QStringLiteral("format"), QStringLiteral("bmp32"));
+    bwObj.insert(QStringLiteral("format"), losslessFormatName());
     bwObj.insert(QStringLiteral("lossless"), true);
     bwObj.insert(QStringLiteral("bytes"), bwBytes);
     bwObj.insert(QStringLiteral("previewBytes"), bwPreviewBytes);
@@ -377,8 +451,9 @@ void PanoramaSaver::process()
     mf.close();
 
     emit saveFinished(job.id, true,
-        QString("OK panoW=%1 lossless BMP RGB=%2MB(%3ms) BW=%4MB(%5ms) compose=%6ms")
+        QString("OK panoW=%1 lossless %2 RGB=%3MB(%4ms) BW=%5MB(%6ms) compose=%7ms")
             .arg(saveW)
+            .arg(losslessLogName())
             .arg(rgbBytes / 1024 / 1024).arg(rgbWriteMs)
             .arg(bwBytes / 1024 / 1024).arg(bwWriteMs)
             .arg(composeMs),

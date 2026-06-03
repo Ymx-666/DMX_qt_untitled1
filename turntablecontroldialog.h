@@ -34,6 +34,7 @@ public:
     void applySettings(const Settings &settings);
     Settings currentSettings() const;
     bool runWithCurrentSettings(QString *errMsg);
+    void stopAndDisableOrtho();
 
 protected:
     void showEvent(QShowEvent *event) override;

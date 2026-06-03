@@ -35,7 +35,7 @@ private slots:
                 "\"panorama\":{\"fullWidth\":65536,\"fullHeight\":4096,\"thumbWidth\":8192,\"thumbHeight\":240,\"previewWidth\":4096,\"previewJpegQuality\":90},"
                 "\"recording\":{\"rollMinutes\":7},"
                 "\"device\":{\"ip\":\"192.168.4.9\",\"cmdPortSend\":5011,\"cmdPortReply\":5012},"
-                "\"turntable\":{\"serialPort\":\"COM7\",\"baudRate\":115200,\"direction\":\"left\",\"speed\":57,\"orthoEnabled\":true,\"orthoLength\":2048,\"feedbackEnabled\":false}"
+                "\"turntable\":{\"serialPort\":\"COM7\",\"baudRate\":115200,\"direction\":\"left\",\"speed\":57,\"orthoEnabled\":false,\"orthoLength\":2048,\"feedbackEnabled\":false}"
                 "}");
         f.close();
 
@@ -66,7 +66,7 @@ private slots:
         QCOMPARE(cfg.turntableBaudRate, 115200);
         QCOMPARE(cfg.turntableDirection, QStringLiteral("left"));
         QCOMPARE(cfg.turntableSpeed, 57);
-        QCOMPARE(cfg.turntableOrthoEnabled, true);
+        QCOMPARE(cfg.turntableOrthoEnabled, false);
         QCOMPARE(cfg.turntableOrthoLength, 2048);
         QCOMPARE(cfg.turntableFeedbackEnabled, false);
     }
@@ -107,7 +107,7 @@ private slots:
         qunsetenv("DMX_TURNTABLE_SPEED");
     }
 
-    void turntableOrthoCannotBeDisabled()
+    void turntableOrthoConfigCanStartDisabled()
     {
         QTemporaryDir dir;
         QVERIFY(dir.isValid());
@@ -121,7 +121,7 @@ private slots:
         qputenv("DMX_TURNTABLE_ORTHO", "0");
         const AppConfig cfg = AppConfig::loadFile(path, true);
 
-        QCOMPARE(cfg.turntableOrthoEnabled, true);
+        QCOMPARE(cfg.turntableOrthoEnabled, false);
         qunsetenv("DMX_TURNTABLE_ORTHO");
     }
 };

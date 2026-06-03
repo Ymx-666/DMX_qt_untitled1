@@ -84,12 +84,11 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
 
     QGridLayout *layAdvanced = new QGridLayout();
     btnEnableOrtho = new QPushButton(zh("开启正交输出"), this);
-    btnDisableOrtho = new QPushButton(zh("正交输出保持开启"), this);
-    btnDisableOrtho->setEnabled(false);
+    btnDisableOrtho = new QPushButton(zh("关闭正交输出"), this);
     cmbOrthoLength = new QComboBox(this);
     cmbOrthoLength->addItems({"256", "512", "1024", "2048", "4096"});
     chkOrthoEnabled = new QCheckBox(zh("正交输出已开启"), this);
-    chkOrthoEnabled->setChecked(true);
+    chkOrthoEnabled->setChecked(false);
     chkOrthoEnabled->setEnabled(false);
     btnSetLength = new QPushButton(zh("设置正交包长"), this);
 
@@ -127,21 +126,23 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
 
     connect(btnLeft, &QPushButton::clicked, this, [=]() {
         setComboByData(cmbDirection, QStringLiteral("left"));
-        m_driver->turnLeft(cmbSpeed->currentData().toInt());
+        QString err;
+        if (!runWithCurrentSettings(&err)) QMessageBox::warning(this, zh("\xE9\x94\x99\xE8\xAF\xAF"), err);
     });
     connect(btnRight, &QPushButton::clicked, this, [=]() {
         setComboByData(cmbDirection, QStringLiteral("right"));
-        m_driver->turnRight(cmbSpeed->currentData().toInt());
+        QString err;
+        if (!runWithCurrentSettings(&err)) QMessageBox::warning(this, zh("\xE9\x94\x99\xE8\xAF\xAF"), err);
     });
-    connect(btnStop, &QPushButton::clicked, this, [=]() { m_driver->stop(); });
+    connect(btnStop, &QPushButton::clicked, this, [=]() { stopAndDisableOrtho(); });
 
     connect(btnEnableOrtho, &QPushButton::clicked, this, [=]() {
         chkOrthoEnabled->setChecked(true);
         m_driver->enableOrtho();
     });
     connect(btnDisableOrtho, &QPushButton::clicked, this, [=]() {
-        chkOrthoEnabled->setChecked(true);
-        m_driver->enableOrtho();
+        chkOrthoEnabled->setChecked(false);
+        m_driver->disableOrtho();
     });
     connect(btnSetLength, &QPushButton::clicked, this, [=]() {
         m_driver->setOrthoLength(cmbOrthoLength->currentText().toInt());
@@ -176,8 +177,7 @@ void TurntableControlDialog::applySettings(const TurntableControlDialog::Setting
         cmbOrthoLength->addItem(QString::number(settings.orthoLength));
     }
     setComboByText(cmbOrthoLength, QString::number(settings.orthoLength));
-    Q_UNUSED(settings.orthoEnabled);
-    chkOrthoEnabled->setChecked(true);
+    chkOrthoEnabled->setChecked(settings.orthoEnabled);
     chkFeedbackEnabled->setChecked(settings.feedbackEnabled);
 }
 
@@ -211,7 +211,7 @@ TurntableControlDialog::Settings TurntableControlDialog::currentSettings() const
     s.direction = cmbDirection->currentData().toString().trimmed().toLower();
     if (s.direction != QStringLiteral("left")) s.direction = QStringLiteral("right");
     s.speed = cmbSpeed->currentData().toInt();
-    s.orthoEnabled = true;
+    s.orthoEnabled = chkOrthoEnabled->isChecked();
     s.orthoLength = cmbOrthoLength->currentText().toInt();
     s.feedbackEnabled = chkFeedbackEnabled->isChecked();
     return s;
@@ -240,16 +240,33 @@ bool TurntableControlDialog::runWithCurrentSettings(QString *errMsg)
         QThread::msleep(120);
     }
 
-    chkOrthoEnabled->setChecked(true);
-    m_driver->enableOrtho();
+    m_driver->disableOrtho();
+    chkOrthoEnabled->setChecked(false);
     QThread::msleep(40);
+
+    if (s.direction == QStringLiteral("left")) m_driver->turnLeft(s.speed);
+    else m_driver->turnRight(s.speed);
+    QThread::msleep(80);
+
     m_driver->setOrthoLength(s.orthoLength);
     QThread::msleep(40);
     if (s.feedbackEnabled) m_driver->enableFeedback();
     else m_driver->disableFeedback();
     QThread::msleep(40);
-
-    if (s.direction == QStringLiteral("left")) m_driver->turnLeft(s.speed);
-    else m_driver->turnRight(s.speed);
+    m_driver->enableOrtho();
+    chkOrthoEnabled->setChecked(true);
     return true;
+}
+
+void TurntableControlDialog::stopAndDisableOrtho()
+{
+    if (!m_driver) return;
+    if (!m_driver->isOpen()) {
+        chkOrthoEnabled->setChecked(false);
+        return;
+    }
+    m_driver->stop();
+    QThread::msleep(40);
+    m_driver->disableOrtho();
+    chkOrthoEnabled->setChecked(false);
 }

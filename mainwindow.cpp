@@ -563,7 +563,21 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(shortcutCtrlR, &QShortcut::activated, this, &MainWindow::onClearUiClicked);
 
     connect(m_driver, &TurntableDriver::angleUpdated, this, [=](double realAngle){
-        if (!m_zeroAngleInited) {
+        if (m_waitingForRunAngle) {
+            m_waitingForRunAngle = false;
+            m_zeroAngleInited = true;
+            m_zeroAngleRaw = realAngle;
+            m_angleHistory.clear();
+            sendCommand("TG_OPEN_DEVICE;");
+            m_isDeviceOpen = true;
+            updateUiState();
+            addLog(QStringLiteral("TURNTABLE"),
+                   u8s("\xE6\xAD\xA3\xE4\xBA\xA4\xE8\xBE\x93\xE5\x87\xBA\xE5\xB7\xB2\xE7\x94\x9F\xE6\x95\x88\xEF\xBC\x8C\xE5\xB7\xB2\xE6\x8C\x89\xE5\xBD\x93\xE5\x89\x8D\xE9\x9B\xB6\xE7\x82\xB9\xE5\xBC\x80\xE5\xA7\x8B\xE6\x8E\xA5\xE6\x94\xB6\xE5\x9B\xBE\xE5\x83\x8F\xE6\x95\xB0\xE6\x8D\xAE"),
+                   QStringLiteral("#6A9955"));
+            if (ui->statusbar) {
+                ui->statusbar->showMessage(u8s("\xE6\xAD\xA3\xE4\xBA\xA4\xE8\xBE\x93\xE5\x87\xBA\xE5\xB7\xB2\xE7\x94\x9F\xE6\x95\x88\xEF\xBC\x8C\xE5\xBC\x80\xE5\xA7\x8B\xE6\x8E\xA5\xE6\x94\xB6\xE5\x9B\xBE\xE5\x83\x8F\xE6\x95\xB0\xE6\x8D\xAE"), 3000);
+            }
+        } else if (!m_zeroAngleInited) {
             m_zeroAngleInited = true;
             m_zeroAngleRaw = realAngle;
         }
@@ -650,7 +664,9 @@ void MainWindow::mousePressEvent(QMouseEvent *event)
 
 MainWindow::~MainWindow()
 {
-    if(m_driver) { m_driver->stop(); m_driver->closePort(); }
+    if(m_ctrlDialog) m_ctrlDialog->stopAndDisableOrtho();
+    else if(m_driver) m_driver->stop();
+    if(m_driver) m_driver->closePort();
     if(m_pathThread) { m_pathThread->stop(); m_pathThread->wait(); }
     if(m_colorThread) { m_colorThread->stop(); m_colorThread->wait(); }
     if(m_thermalThread) { m_thermalThread->stop(); m_thermalThread->wait(); }
@@ -820,8 +836,9 @@ void MainWindow::createToolBar()
 
 void MainWindow::updateUiState()
 {
-    m_actOpenDevice->setEnabled(!m_isDeviceOpen);
-    m_actCloseDevice->setEnabled(m_isDeviceOpen);
+    const bool opening = m_waitingForRunAngle;
+    m_actOpenDevice->setEnabled(!m_isDeviceOpen && !opening);
+    m_actCloseDevice->setEnabled(m_isDeviceOpen || opening);
     m_actSavePng->setEnabled(m_isDeviceOpen);
     m_actSaveJpg->setEnabled(m_isDeviceOpen);
     m_actSaveVideo->setEnabled(m_isDeviceOpen);
@@ -902,37 +919,58 @@ double MainWindow::toRelativeAngle(double rawAngleDeg)
 
 void MainWindow::onActionOpenDevice()
 {
-    sendCommand("TG_OPEN_DEVICE;");
+    if (m_isDeviceOpen || m_waitingForRunAngle) return;
+
     QString turntableErr;
     if (m_ctrlDialog && m_ctrlDialog->runWithCurrentSettings(&turntableErr)) {
         const TurntableControlDialog::Settings s = m_ctrlDialog->currentSettings();
-        const QString directionText = (s.direction == QStringLiteral("left")) ? u8s("左转") : u8s("右转");
+        const QString directionText = (s.direction == QStringLiteral("left")) ? u8s("\xE5\xB7\xA6\xE8\xBD\xAC") : u8s("\xE5\x8F\xB3\xE8\xBD\xAC");
+        m_waitingForRunAngle = true;
+        m_isDeviceOpen = false;
+        m_zeroAngleInited = false;
+        m_angleHistory.clear();
+        m_lastAngleDiagMs = 0;
+        updateUiState();
         addLog(QStringLiteral("TURNTABLE"),
-               u8s("运行 方向=%1 速度=%2 串口=%3 波特率=%4 正交输出=%5 角度回传=%6")
+               u8s("\xE8\xBF\x90\xE8\xA1\x8C\x20\xE6\x96\xB9\xE5\x90\x91\x3D\x25\x31\x20\xE9\x80\x9F\xE5\xBA\xA6\x3D\x25\x32\x20\xE4\xB8\xB2\xE5\x8F\xA3\x3D\x25\x33\x20\xE6\xB3\xA2\xE7\x89\xB9\xE7\x8E\x87\x3D\x25\x34\x20\xE6\xAD\xA3\xE4\xBA\xA4\xE8\xBE\x93\xE5\x87\xBA\x3D\xE7\xAD\x89\xE5\xBE\x85\xE8\xBF\x87\xE9\x9B\xB6\xE5\xBC\x80\xE5\x90\xAF\x20\xE8\xA7\x92\xE5\xBA\xA6\xE5\x9B\x9E\xE4\xBC\xA0\x3D\x25\x35")
                    .arg(directionText)
                    .arg(s.speed)
-                   .arg(s.serialPort.isEmpty() ? u8s("(未选择)") : s.serialPort)
+                   .arg(s.serialPort.isEmpty() ? u8s("\x28\xE6\x9C\xAA\xE9\x80\x89\xE6\x8B\xA9\x29") : s.serialPort)
                    .arg(s.baudRate)
-                   .arg(s.orthoEnabled ? 1 : 0)
                    .arg(s.feedbackEnabled ? 1 : 0),
                QStringLiteral("#6A9955"));
-    } else if (!turntableErr.isEmpty()) {
-        addLog(QStringLiteral("TURNTABLE"), u8s("自动启动失败: %1").arg(turntableErr), QStringLiteral("#F44336"));
         if (ui->statusbar) {
-            ui->statusbar->showMessage(u8s("转台未启动: %1").arg(turntableErr), 5000);
+            ui->statusbar->showMessage(u8s("\xE8\xBD\xAC\xE5\x8F\xB0\xE5\xB7\xB2\xE5\x90\xAF\xE5\x8A\xA8\xEF\xBC\x8C\xE7\xAD\x89\xE5\xBE\x85\xE6\xAD\xA3\xE4\xBA\xA4\xE8\xBE\x93\xE5\x87\xBA\xE8\xBF\x87\xE9\x9B\xB6\xE7\x82\xB9\xE5\x90\x8E\xE6\x8E\xA5\xE6\x94\xB6\xE5\x9B\xBE\xE5\x83\x8F\xE6\x95\xB0\xE6\x8D\xAE"), 5000);
+        }
+        return;
+    } else if (!turntableErr.isEmpty()) {
+        addLog(QStringLiteral("TURNTABLE"), u8s("\xE8\x87\xAA\xE5\x8A\xA8\xE5\x90\xAF\xE5\x8A\xA8\xE5\xA4\xB1\xE8\xB4\xA5\x3A\x20\x25\x31").arg(turntableErr), QStringLiteral("#F44336"));
+        if (ui->statusbar) {
+            ui->statusbar->showMessage(u8s("\xE8\xBD\xAC\xE5\x8F\xB0\xE6\x9C\xAA\xE5\x90\xAF\xE5\x8A\xA8\x3A\x20\x25\x31").arg(turntableErr), 5000);
         }
     }
-    m_isDeviceOpen = true;
     updateUiState();
-    ui->statusbar->showMessage(u8s("\xE6\xAD\xA3\xE5\x9C\xA8\xE5\x90\x91\xE8\xAE\xBE\xE5\xA4\x87\xE4\xB8\x8B\xE5\x8F\x91\xE4\xBD\xBF\xE8\x83\xBD\xE5\x91\xBD\xE4\xBB\xA4\x2E\x2E\x2E"), 2000);
 }
 
 void MainWindow::onActionCloseDevice()
 {
-    sendCommand("TG_CLOSE_DEVICE;");
-    if (m_driver) m_driver->stop();
+    if (m_isDeviceOpen || m_waitingForRunAngle) {
+        sendCommand("TG_CLOSE_DEVICE;");
+    }
+    m_waitingForRunAngle = false;
+    if (m_ctrlDialog) m_ctrlDialog->stopAndDisableOrtho();
+    else if (m_driver) {
+        m_driver->stop();
+        QThread::msleep(40);
+        m_driver->disableOrtho();
+    }
     m_isDeviceOpen = false;
+    m_zeroAngleInited = false;
+    m_angleHistory.clear();
     updateUiState();
+    addLog(QStringLiteral("TURNTABLE"),
+           u8s("\xE5\x81\x9C\xE6\xAD\xA2\xE8\xAE\xBE\xE5\xA4\x87\xEF\xBC\x9A\xE8\xBD\xAC\xE5\x8F\xB0\xE5\xB7\xB2\xE5\x81\x9C\xE6\xAD\xA2\xEF\xBC\x8C\xE6\xAD\xA3\xE4\xBA\xA4\xE8\xBE\x93\xE5\x87\xBA\xE5\xB7\xB2\xE5\x85\xB3\xE9\x97\xAD"),
+           QStringLiteral("#569CD6"));
     ui->statusbar->showMessage(u8s("\xE6\xAD\xA3\xE5\x9C\xA8\xE5\x90\x91\xE8\xAE\xBE\xE5\xA4\x87\xE4\xB8\x8B\xE5\x8F\x91\xE5\x81\x9C\xE6\xAD\xA2\xE5\x91\xBD\xE4\xBB\xA4\x2E\x2E\x2E"), 2000);
 }
 
@@ -1150,6 +1188,8 @@ void MainWindow::onPanoRefreshTick()
 void MainWindow::onPathReceived(const QString &type, const QString &path, const QString &sender, qint64 rxMs)
 {
     const QString t = type.trimmed().toUpper();
+    if (!m_isDeviceOpen || m_waitingForRunAngle) return;
+
     double angleDeg = m_zeroAngleInited ? m_latestAngle : -1.0;
     qint64 latencyMs = m_captureLatencyRgbMs;
     if (t == "BW" || t == "GRAY") latencyMs = m_captureLatencyBwMs;
