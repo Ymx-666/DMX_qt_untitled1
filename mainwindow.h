@@ -185,6 +185,11 @@ private:
     void updateUiState();
     void setupLogDock(); // 初始化日志界面
     double toRelativeAngle(double rawAngleDeg);
+    void requestRecordingStartAtNextZero();
+    void startRecordingNowAfterZero();
+    void stopRecordingNow();
+    void updateRecordActionText();
+    static bool crossedZero(double prevAngleDeg, double currentAngleDeg);
 
     void sendCommand(const QString &cmd);
     void checkTargetDetection(double currentAngle);
@@ -277,6 +282,9 @@ private:
     QThread *m_recordThread = nullptr;
     RawRecorder *m_recordWorker = nullptr;
     bool m_isRecording = false;
+    bool m_recordPendingZero = false;
+    bool m_recordPendingHasAngle = false;
+    double m_recordPendingPrevAngle = 0.0;
 
     QFile *m_logFile = nullptr;
 };

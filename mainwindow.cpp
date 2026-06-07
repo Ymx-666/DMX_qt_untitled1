@@ -590,6 +590,17 @@ MainWindow::MainWindow(QWidget *parent) :
         if (m_colorThread) m_colorThread->setCurrentAngle(displayAngle);
         if (m_thermalThread) m_thermalThread->setCurrentAngle(displayAngle);
 
+        if (m_recordPendingZero) {
+            if (!m_recordPendingHasAngle) {
+                m_recordPendingPrevAngle = displayAngle;
+                m_recordPendingHasAngle = true;
+            } else if (crossedZero(m_recordPendingPrevAngle, displayAngle)) {
+                startRecordingNowAfterZero();
+            } else {
+                m_recordPendingPrevAngle = displayAngle;
+            }
+        }
+
         static bool speedInit = false;
         static double prevA = 0.0;
         static qint64 prevMs = 0;
@@ -664,6 +675,7 @@ void MainWindow::mousePressEvent(QMouseEvent *event)
 
 MainWindow::~MainWindow()
 {
+    stopRecordingNow();
     if(m_ctrlDialog) m_ctrlDialog->stopAndDisableOrtho();
     else if(m_driver) m_driver->stop();
     if(m_driver) m_driver->closePort();
@@ -843,7 +855,10 @@ void MainWindow::updateUiState()
     m_actSaveJpg->setEnabled(m_isDeviceOpen);
     m_actSaveVideo->setEnabled(m_isDeviceOpen);
     m_actStopCapture->setEnabled(m_isDeviceOpen);
-    if (m_actRecord) m_actRecord->setEnabled(m_isDeviceOpen);
+    if (m_actRecord) {
+        m_actRecord->setEnabled(m_isDeviceOpen || m_isRecording || m_recordPendingZero);
+        updateRecordActionText();
+    }
 
     if (m_actSaveFullPanorama) {
         bool canSave = false;
@@ -884,26 +899,107 @@ void MainWindow::onToggleRecording()
     if (!m_actRecord) return;
     if (!m_recordWorker) {
         m_actRecord->setChecked(false);
+        updateRecordActionText();
         return;
     }
     if (!m_isDeviceOpen) {
         m_actRecord->setChecked(false);
+        updateRecordActionText();
         return;
     }
 
     const bool enable = m_actRecord->isChecked();
-    m_isRecording = enable;
-
-    if (m_colorThread) m_colorThread->setRecordingEnabled(enable);
-    if (m_thermalThread) m_thermalThread->setRecordingEnabled(enable);
-
     if (enable) {
-        QMetaObject::invokeMethod(m_recordWorker, "startRecording", Qt::QueuedConnection, Q_ARG(QString, resolveRecordRoot()), Q_ARG(int, AppConfig::instance().recordRollMinutes));
-        addLog(QStringLiteral("REC"), QStringLiteral("Start"), QStringLiteral("#569CD6"));
+        requestRecordingStartAtNextZero();
         return;
     }
-    QMetaObject::invokeMethod(m_recordWorker, "stopRecording", Qt::QueuedConnection);
-    addLog(QStringLiteral("REC"), QStringLiteral("Stop"), QStringLiteral("#569CD6"));
+    stopRecordingNow();
+}
+
+void MainWindow::requestRecordingStartAtNextZero()
+{
+    if (!m_recordWorker || !m_isDeviceOpen) {
+        if (m_actRecord) m_actRecord->setChecked(false);
+        updateRecordActionText();
+        return;
+    }
+    if (m_isRecording || m_recordPendingZero) {
+        if (m_actRecord) m_actRecord->setChecked(true);
+        updateRecordActionText();
+        return;
+    }
+
+    m_recordPendingZero = true;
+    m_recordPendingHasAngle = m_zeroAngleInited;
+    m_recordPendingPrevAngle = m_latestAngle;
+    if (m_colorThread) m_colorThread->setRecordingEnabled(false);
+    if (m_thermalThread) m_thermalThread->setRecordingEnabled(false);
+    if (m_actRecord) m_actRecord->setChecked(true);
+    updateRecordActionText();
+    addLog(QStringLiteral("REC"), u8s("\xE7\xAD\x89\xE5\xBE\x85\xE8\xBD\xAC\xE5\x8F\xB0\xE8\xBF\x87\xE9\x9B\xB6\xE7\x82\xB9\xE5\x90\x8E\xE5\xBC\x80\xE5\xA7\x8B\xE5\xBD\x95\xE5\x88\xB6"), QStringLiteral("#FFD54F"));
+    if (ui->statusbar) ui->statusbar->showMessage(u8s("\xE7\xAD\x89\xE5\xBE\x85\xE8\xBD\xAC\xE5\x8F\xB0\xE8\xBF\x87\xE9\x9B\xB6\xE7\x82\xB9\xE5\x90\x8E\xE5\xBC\x80\xE5\xA7\x8B\xE5\xBD\x95\xE5\x88\xB6"), 3000);
+}
+
+void MainWindow::startRecordingNowAfterZero()
+{
+    if (!m_recordWorker || !m_isDeviceOpen || !m_recordPendingZero) return;
+
+    m_recordPendingZero = false;
+    m_recordPendingHasAngle = false;
+    m_isRecording = true;
+
+    QMetaObject::invokeMethod(
+        m_recordWorker,
+        "startRecording",
+        Qt::BlockingQueuedConnection,
+        Q_ARG(QString, resolveRecordRoot()),
+        Q_ARG(int, AppConfig::instance().recordRollMinutes));
+    if (m_colorThread) m_colorThread->setRecordingEnabled(true);
+    if (m_thermalThread) m_thermalThread->setRecordingEnabled(true);
+    if (m_actRecord) m_actRecord->setChecked(true);
+    updateRecordActionText();
+    addLog(QStringLiteral("REC"), u8s("\xE5\xBD\x95\xE5\x88\xB6\xE5\xB7\xB2\xE5\x9C\xA8\xE8\xBF\x87\xE9\x9B\xB6\xE7\x82\xB9\xE5\x90\x8E\xE5\xBC\x80\xE5\xA7\x8B"), QStringLiteral("#6A9955"));
+    if (ui->statusbar) ui->statusbar->showMessage(u8s("\xE5\xBD\x95\xE5\x88\xB6\xE5\xB7\xB2\xE5\x9C\xA8\xE8\xBF\x87\xE9\x9B\xB6\xE7\x82\xB9\xE5\x90\x8E\xE5\xBC\x80\xE5\xA7\x8B"), 3000);
+}
+
+void MainWindow::stopRecordingNow()
+{
+    const bool wasPending = m_recordPendingZero;
+    const bool wasRecording = m_isRecording;
+    m_recordPendingZero = false;
+    m_recordPendingHasAngle = false;
+    m_isRecording = false;
+
+    if (m_colorThread) m_colorThread->setRecordingEnabled(false);
+    if (m_thermalThread) m_thermalThread->setRecordingEnabled(false);
+    if (wasRecording && m_recordWorker) {
+        QMetaObject::invokeMethod(m_recordWorker, "stopRecording", Qt::QueuedConnection);
+    }
+    if (m_actRecord) m_actRecord->setChecked(false);
+    updateRecordActionText();
+
+    if (wasPending) {
+        addLog(QStringLiteral("REC"), u8s("\xE5\x8F\x96\xE6\xB6\x88\xE7\xAD\x89\xE5\xBE\x85\xE8\xBF\x87\xE9\x9B\xB6\xE5\xBD\x95\xE5\x88\xB6"), QStringLiteral("#569CD6"));
+    } else if (wasRecording) {
+        addLog(QStringLiteral("REC"), QStringLiteral("Stop"), QStringLiteral("#569CD6"));
+    }
+}
+
+void MainWindow::updateRecordActionText()
+{
+    if (!m_actRecord) return;
+    if (m_recordPendingZero) {
+        m_actRecord->setText(u8s("\xE7\xAD\x89\xE5\xBE\x85\xE8\xBF\x87\xE9\x9B\xB6\xE5\xBD\x95\xE5\x88\xB6"));
+    } else if (m_isRecording) {
+        m_actRecord->setText(u8s("\xE5\x81\x9C\xE6\xAD\xA2\xE5\xBD\x95\xE5\x88\xB6"));
+    } else {
+        m_actRecord->setText(u8s("\xE5\xBC\x80\xE5\xA7\x8B\xE5\xBD\x95\xE5\x88\xB6"));
+    }
+}
+
+bool MainWindow::crossedZero(double prevAngleDeg, double currentAngleDeg)
+{
+    return qAbs(currentAngleDeg - prevAngleDeg) > 180.0;
 }
 double MainWindow::toRelativeAngle(double rawAngleDeg)
 {
@@ -954,6 +1050,7 @@ void MainWindow::onActionOpenDevice()
 
 void MainWindow::onActionCloseDevice()
 {
+    stopRecordingNow();
     if (m_isDeviceOpen || m_waitingForRunAngle) {
         sendCommand("TG_CLOSE_DEVICE;");
     }
