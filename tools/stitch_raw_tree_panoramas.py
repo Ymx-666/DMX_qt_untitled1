@@ -81,6 +81,7 @@ def render_progress_line(
     input_frame_count: int,
     panorama_count: int,
     skipped_panorama_count: int,
+    failed_panorama_count: int,
     dropped_tail_frames: int,
     width: int = 24,
 ) -> str:
@@ -91,7 +92,8 @@ def render_progress_line(
     return (
         f"[{bar}] {done}/{total} folders | {current} | "
         f"frames={input_frame_count} | panoramas={panorama_count} | "
-        f"skipped={skipped_panorama_count} | tail={dropped_tail_frames}"
+        f"skipped={skipped_panorama_count} | failed={failed_panorama_count} | "
+        f"tail={dropped_tail_frames}"
     )
 
 
@@ -104,6 +106,7 @@ def _write_progress(
     input_frame_count: int,
     panorama_count: int,
     skipped_panorama_count: int,
+    failed_panorama_count: int,
     dropped_tail_frames: int,
 ) -> None:
     stream.write(
@@ -115,6 +118,7 @@ def _write_progress(
             input_frame_count=input_frame_count,
             panorama_count=panorama_count,
             skipped_panorama_count=skipped_panorama_count,
+            failed_panorama_count=failed_panorama_count,
             dropped_tail_frames=dropped_tail_frames,
         )
     )
@@ -147,6 +151,7 @@ def stitch_job(
         "panoramaCount": len(groups),
         "generatedPanoramas": 0,
         "skippedPanoramas": 0,
+        "failedPanoramas": 0,
         "droppedTailFrames": dropped_tail_frames,
         "panoramas": [],
     }
@@ -166,18 +171,23 @@ def stitch_job(
         pano_w = None
         pano_h = None
         uncompressed_bytes = None
+        error = None
         if skipped:
             folder_manifest["skippedPanoramas"] += 1
         else:
-            pano_w, pano_h, uncompressed_bytes = stitch_group(
-                records,
-                pano_path,
-                expected_frame_size=expected_frame_size,
-                orient=orient,
-                mirror=mirror,
-            )
-            write_preview(pano_path, preview_path, preview_width, preview_quality)
-            folder_manifest["generatedPanoramas"] += 1
+            try:
+                pano_w, pano_h, uncompressed_bytes = stitch_group(
+                    records,
+                    pano_path,
+                    expected_frame_size=expected_frame_size,
+                    orient=orient,
+                    mirror=mirror,
+                )
+                write_preview(pano_path, preview_path, preview_width, preview_quality)
+                folder_manifest["generatedPanoramas"] += 1
+            except Exception as exc:
+                error = str(exc)
+                folder_manifest["failedPanoramas"] += 1
         folder_manifest["panoramas"].append(
             {
                 "file": pano_name,
@@ -187,6 +197,8 @@ def stitch_job(
                 "frames": [str(p) for p in ordered_paths],
                 "uncompressedBytes": uncompressed_bytes,
                 "skipped": skipped,
+                "failed": error is not None,
+                "error": error,
             }
         )
 
@@ -235,6 +247,7 @@ def batch_stitch_tree(
         "totalPanoramas": 0,
         "totalGeneratedPanoramas": 0,
         "totalSkippedPanoramas": 0,
+        "totalFailedPanoramas": 0,
         "totalDroppedTailFrames": 0,
         "folders": [],
     }
@@ -257,6 +270,7 @@ def batch_stitch_tree(
         manifest["totalPanoramas"] += folder_manifest["panoramaCount"]
         manifest["totalGeneratedPanoramas"] += folder_manifest["generatedPanoramas"]
         manifest["totalSkippedPanoramas"] += folder_manifest["skippedPanoramas"]
+        manifest["totalFailedPanoramas"] += folder_manifest["failedPanoramas"]
         manifest["totalDroppedTailFrames"] += folder_manifest["droppedTailFrames"]
         if show_progress:
             _write_progress(
@@ -267,6 +281,7 @@ def batch_stitch_tree(
                 input_frame_count=folder_manifest["inputFrames"],
                 panorama_count=folder_manifest["panoramaCount"],
                 skipped_panorama_count=folder_manifest["skippedPanoramas"],
+                failed_panorama_count=folder_manifest["failedPanoramas"],
                 dropped_tail_frames=folder_manifest["droppedTailFrames"],
             )
 
@@ -321,6 +336,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         f"panoramas={manifest['totalPanoramas']} "
         f"generated={manifest['totalGeneratedPanoramas']} "
         f"skipped={manifest['totalSkippedPanoramas']} "
+        f"failed={manifest['totalFailedPanoramas']} "
         f"droppedTailFrames={manifest['totalDroppedTailFrames']}"
     )
     return 0
