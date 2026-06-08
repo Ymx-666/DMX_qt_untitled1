@@ -77,21 +77,29 @@ def resolve_source_path(source: str) -> Path:
     return path
 
 
-def trailing_number(path: Path) -> Tuple[int, int, str]:
+def dmx_numeric_suffix(path: Path) -> Optional[int]:
     stem = path.stem
-    m = re.search(r"(\d+)$", stem)
-    if m:
-        return (0, int(m.group(1)), path.name)
-    return (1, 0, path.name)
+    m = re.match(r"^(RGB|BW|GRAY)_(?:.*_)?(\d+)$", stem, re.IGNORECASE)
+    if not m:
+        return None
+    return int(m.group(2))
+
+
+def dmx_file_sort_key(item: Tuple[int, Path]) -> Tuple[int, str]:
+    suffix, path = item
+    return (suffix, path.name)
 
 
 def list_image_files(source_dir: Path) -> List[Path]:
-    files = [
-        p
-        for p in Path(source_dir).iterdir()
-        if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS
-    ]
-    return sorted(files, key=trailing_number)
+    files: List[Tuple[int, Path]] = []
+    for path in Path(source_dir).iterdir():
+        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        suffix = dmx_numeric_suffix(path)
+        if suffix is None:
+            continue
+        files.append((suffix, path))
+    return [path for _, path in sorted(files, key=dmx_file_sort_key)]
 
 
 def group_frames(frames: Sequence[Path], frames_per_panorama: int = 16) -> List[List[Path]]:

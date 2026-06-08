@@ -40,6 +40,30 @@ class StitchRawFolderPanoramasTests(unittest.TestCase):
 
             self.assertEqual([p.name for p in files], ["RGB_1.jpg", "RGB_2.jpg", "RGB_10.jpg", "RGB_11.jpeg"])
 
+    def test_list_image_files_uses_dmx_numeric_suffix_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in [
+                "RGB_20260608_115310_2728.jpg",
+                "RGB_20260608_115310_2726.jpg",
+                "RGB_20260608_115310_2727.jpg",
+                "RGB_20260608_115310_preview.jpg",
+                "RGB_20260608_115310_2729.tmp",
+                "other_1.jpg",
+            ]:
+                (root / name).write_bytes(b"x")
+
+            files = stitch.list_image_files(root)
+
+            self.assertEqual(
+                [p.name for p in files],
+                [
+                    "RGB_20260608_115310_2726.jpg",
+                    "RGB_20260608_115310_2727.jpg",
+                    "RGB_20260608_115310_2728.jpg",
+                ],
+            )
+
     def test_group_frames_uses_complete_groups_only(self):
         frames = [Path(f"{i}.jpg") for i in range(34)]
 
