@@ -50,6 +50,11 @@ public:
         }
     }
 
+    void clear() {
+        m_t.clear();
+        m_a.clear();
+    }
+
     bool empty() const { return m_t.isEmpty(); }
     int size() const { return m_t.size(); }
 
