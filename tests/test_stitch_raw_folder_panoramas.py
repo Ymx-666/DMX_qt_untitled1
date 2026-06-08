@@ -73,6 +73,48 @@ class StitchRawFolderPanoramasTests(unittest.TestCase):
         self.assertEqual(groups[0], frames[:16])
         self.assertEqual(groups[1], frames[16:32])
 
+    def test_arg_parser_reverses_each_group_by_default(self):
+        args = stitch.build_arg_parser().parse_args([])
+
+        self.assertTrue(args.reverse)
+
+    def test_arg_parser_can_keep_forward_order_for_comparison(self):
+        args = stitch.build_arg_parser().parse_args(["--forward"])
+
+        self.assertFalse(args.reverse)
+
+    def test_stitch_raw_folder_reverses_each_group_by_default(self):
+        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as out_tmp:
+            src = Path(src_tmp)
+            out = Path(out_tmp)
+            for suffix in range(1, 5):
+                (src / f"RGB_20260608_115310_{suffix}.jpg").write_bytes(b"x")
+
+            original_stitch_group = stitch.stitch_group
+            original_write_preview = stitch.write_preview
+            try:
+                stitch.stitch_group = lambda *args, **kwargs: (0, 0, 0)
+                stitch.write_preview = lambda *args, **kwargs: None
+
+                manifest = stitch.stitch_raw_folder(
+                    str(src),
+                    out,
+                    frames_per_panorama=4,
+                )
+            finally:
+                stitch.stitch_group = original_stitch_group
+                stitch.write_preview = original_write_preview
+
+            self.assertEqual(
+                [Path(p).name for p in manifest["panoramas"][0]["frames"]],
+                [
+                    "RGB_20260608_115310_4.jpg",
+                    "RGB_20260608_115310_3.jpg",
+                    "RGB_20260608_115310_2.jpg",
+                    "RGB_20260608_115310_1.jpg",
+                ],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

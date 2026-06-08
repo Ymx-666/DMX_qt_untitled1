@@ -140,7 +140,7 @@ def stitch_raw_folder(
     preview_quality: int = 95,
     orient: bool = True,
     mirror: bool = True,
-    reverse: bool = False,
+    reverse: bool = True,
 ) -> dict:
     source_dir = resolve_source_path(source)
     out_dir = Path(out_dir).expanduser()
@@ -221,7 +221,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--preview-quality", type=int, default=95, help="Preview JPG quality 1-100. Default: 95")
     p.add_argument("--no-orient", action="store_true", help="Disable orientation. This writes raw frames directly side by side.")
     p.add_argument("--rotate-only", action="store_true", help="Rotate each raw frame CCW 90 degrees before stitching, but do not horizontally mirror.")
-    p.add_argument("--reverse", action="store_true", help="Reverse each 16-frame group before stitching")
+    order = p.add_mutually_exclusive_group()
+    order.add_argument("--reverse", dest="reverse", action="store_true", default=True, help="Reverse each 16-frame group before stitching. This is the default.")
+    order.add_argument("--forward", dest="reverse", action="store_false", help="Keep each 16-frame group in ascending filename order for comparison")
     return p
 
 
