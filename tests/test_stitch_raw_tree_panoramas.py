@@ -77,14 +77,59 @@ class StitchRawTreePanoramasTests(unittest.TestCase):
             done=2,
             total=10,
             current="BW/1130",
+            input_frame_count=53,
             panorama_count=3,
+            skipped_panorama_count=1,
             dropped_tail_frames=5,
         )
 
         self.assertIn("2/10 folders", line)
         self.assertIn("BW/1130", line)
-        self.assertIn("3 panoramas", line)
-        self.assertIn("dropped 5", line)
+        self.assertIn("frames=53", line)
+        self.assertIn("panoramas=3", line)
+        self.assertIn("skipped=1", line)
+        self.assertIn("tail=5", line)
+
+    def test_arg_parser_accepts_resume(self):
+        args = batch.build_arg_parser().parse_args(["--resume"])
+
+        self.assertTrue(args.resume)
+
+    def test_batch_stitch_tree_resume_skips_existing_panoramas(self):
+        with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as out_tmp:
+            root = Path(src_tmp) / "20260608"
+            src = root / "RGB" / "1035"
+            out = Path(out_tmp)
+            src.mkdir(parents=True)
+            for suffix in range(1, 5):
+                (src / f"RGB_20260608_103500_{suffix}.jpg").write_bytes(b"x")
+            (out / "rgb_20260608_1035_pano_0001.tiff").write_bytes(b"done")
+            (out / "rgb_20260608_1035_pano_0001_preview.jpg").write_bytes(b"done")
+
+            calls = []
+            original_stitch_group = batch.stitch_group
+            original_write_preview = batch.write_preview
+            try:
+                batch.stitch_group = lambda *args, **kwargs: calls.append(args) or (16384, 4096, 1)
+                batch.write_preview = lambda *args, **kwargs: None
+
+                manifest = batch.batch_stitch_tree(
+                    root,
+                    out,
+                    frames_per_panorama=4,
+                    resume=True,
+                    show_progress=False,
+                )
+            finally:
+                batch.stitch_group = original_stitch_group
+                batch.write_preview = original_write_preview
+
+            self.assertEqual(calls, [])
+            self.assertEqual(manifest["totalPanoramas"], 1)
+            self.assertEqual(manifest["totalSkippedPanoramas"], 1)
+            self.assertEqual(manifest["folders"][0]["generatedPanoramas"], 0)
+            self.assertEqual(manifest["folders"][0]["skippedPanoramas"], 1)
+            self.assertTrue(manifest["folders"][0]["panoramas"][0]["skipped"])
 
     def test_batch_stitch_tree_can_write_progress(self):
         with tempfile.TemporaryDirectory() as src_tmp, tempfile.TemporaryDirectory() as out_tmp:
