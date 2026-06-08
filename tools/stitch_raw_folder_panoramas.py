@@ -131,6 +131,7 @@ def stitch_raw_folder(
     preview_width: int = 8192,
     preview_quality: int = 95,
     orient: bool = True,
+    mirror: bool = True,
     reverse: bool = False,
 ) -> dict:
     source_dir = resolve_source_path(source)
@@ -154,8 +155,14 @@ def stitch_raw_folder(
         "panoramaCount": len(groups),
         "droppedTailFrames": len(frames) % frames_per_panorama,
         "expectedFrameSize": "any" if expected_frame_size is None else f"{expected_frame_size[0]}x{expected_frame_size[1]}",
-        "orientLikeLivePanorama": orient,
-        "orientation": "rotate_ccw_90_then_horizontal_mirror" if orient else "none",
+        "orientLikeLivePanorama": orient and mirror,
+        "orientation": (
+            "rotate_ccw_90_then_horizontal_mirror"
+            if orient and mirror else
+            "rotate_ccw_90_only"
+            if orient else
+            "none"
+        ),
         "reverseOrder": reverse,
         "panoramas": [],
     }
@@ -175,6 +182,7 @@ def stitch_raw_folder(
             pano_path,
             expected_frame_size=expected_frame_size,
             orient=orient,
+            mirror=mirror,
         )
         write_preview(pano_path, preview_path, preview_width, preview_quality)
         manifest["panoramas"].append(
@@ -203,7 +211,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--expected-frame-size", type=parse_size, default=(4096, 4096), help="Default 4096x4096; use 'any' to disable")
     p.add_argument("--preview-width", type=int, default=8192, help="Preview JPG width. Default: 8192")
     p.add_argument("--preview-quality", type=int, default=95, help="Preview JPG quality 1-100. Default: 95")
-    p.add_argument("--no-orient", action="store_true", help="Disable UI orientation. Default first rotates CCW 90 degrees, then horizontally mirrors each raw frame before stitching.")
+    p.add_argument("--no-orient", action="store_true", help="Disable orientation. This writes raw frames directly side by side.")
+    p.add_argument("--rotate-only", action="store_true", help="Rotate each raw frame CCW 90 degrees before stitching, but do not horizontally mirror.")
     p.add_argument("--reverse", action="store_true", help="Reverse each 16-frame group before stitching")
     return p
 
@@ -219,6 +228,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         preview_width=args.preview_width,
         preview_quality=args.preview_quality,
         orient=not args.no_orient,
+        mirror=not args.rotate_only,
         reverse=args.reverse,
     )
     print(

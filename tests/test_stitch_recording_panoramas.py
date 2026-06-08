@@ -48,6 +48,18 @@ class StitchRecordingPanoramasTests(unittest.TestCase):
 
         self.assertEqual([[r.path.name for r in g] for g in groups["RGB"]], [["a.jpg", "b.jpg"]])
 
+    def test_orient_frame_can_rotate_without_horizontal_mirror(self):
+        import cv2
+        import numpy as np
+
+        img = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.uint8)
+
+        rotated = stitch._orient_frame(cv2, img, orient=True, mirror=False)
+        mirrored = stitch._orient_frame(cv2, img, orient=True, mirror=True)
+
+        self.assertEqual(rotated.tolist(), [[3, 6], [2, 5], [1, 4]])
+        self.assertEqual(mirrored.tolist(), [[6, 3], [5, 2], [4, 1]])
+
 
 if __name__ == "__main__":
     unittest.main()

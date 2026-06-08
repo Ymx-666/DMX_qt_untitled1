@@ -114,11 +114,13 @@ def _import_cv2():
     return cv2, np
 
 
-def _orient_frame(cv2, image, orient: bool):
+def _orient_frame(cv2, image, orient: bool, mirror: bool = True):
     if not orient:
         return image
     rotated = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
-    return cv2.flip(rotated, 1)
+    if mirror:
+        return cv2.flip(rotated, 1)
+    return rotated
 
 
 def stitch_group(
@@ -127,6 +129,7 @@ def stitch_group(
     *,
     expected_frame_size: Optional[Tuple[int, int]] = (4096, 4096),
     orient: bool = True,
+    mirror: bool = True,
 ) -> Tuple[int, int, int]:
     if not group:
         raise ValueError("group is empty")
@@ -137,7 +140,7 @@ def stitch_group(
     first = cv2.imread(str(group[0].path), cv2.IMREAD_UNCHANGED)
     if first is None:
         raise RuntimeError(f"read failed: {group[0].path}")
-    first = _orient_frame(cv2, first, orient)
+    first = _orient_frame(cv2, first, orient, mirror)
     h, w = first.shape[:2]
     if expected_frame_size is not None and (w, h) != expected_frame_size:
         raise RuntimeError(f"unexpected frame size {w}x{h}: {group[0].path}")
@@ -159,7 +162,7 @@ def stitch_group(
         img = cv2.imread(str(record.path), cv2.IMREAD_UNCHANGED)
         if img is None:
             raise RuntimeError(f"read failed: {record.path}")
-        img = _orient_frame(cv2, img, orient)
+        img = _orient_frame(cv2, img, orient, mirror)
         copy_tile(idx, img)
 
     tiff_compression = getattr(cv2, "IMWRITE_TIFF_COMPRESSION", 259)
