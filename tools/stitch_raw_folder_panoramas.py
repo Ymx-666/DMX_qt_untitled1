@@ -2,7 +2,7 @@
 """Stitch one raw image folder into 16-frame lossless panoramas.
 
 Default source:
-  smb://tg-ds2309.local/data/raw/20260608/RGB/115
+  smb://tg-ds2309.local/data/raw/20260608/RGB/1153
 
 Default output:
   /home/sht/dmx_data/save
@@ -28,7 +28,7 @@ except ModuleNotFoundError:
     from .stitch_recording_panoramas import FrameRecord, parse_size, stitch_group, write_preview
 
 
-DEFAULT_SOURCE = "smb://tg-ds2309.local/data/raw/20260608/RGB/115"
+DEFAULT_SOURCE = "smb://tg-ds2309.local/data/raw/20260608/RGB/1153"
 DEFAULT_OUTPUT = "/home/sht/dmx_data/save"
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
@@ -112,6 +112,15 @@ def stream_name_from_source(source_dir: Path, fallback: str) -> str:
     return fallback.strip().upper() or "RGB"
 
 
+def safe_label(value: str, fallback: str = "folder") -> str:
+    label = re.sub(r"[^A-Za-z0-9_-]+", "_", value.strip())
+    return label.strip("_") or fallback
+
+
+def folder_label_from_source(source_dir: Path) -> str:
+    return safe_label(Path(source_dir).name, "folder")
+
+
 def stitch_raw_folder(
     source: str,
     out_dir: Path,
@@ -130,6 +139,7 @@ def stitch_raw_folder(
 
     actual_stream = stream_name_from_source(source_dir, stream)
     prefix = actual_stream.lower()
+    source_label = folder_label_from_source(source_dir)
     frames = list_image_files(source_dir)
     groups = group_frames(frames, frames_per_panorama)
 
@@ -138,12 +148,14 @@ def stitch_raw_folder(
         "resolvedSource": str(source_dir),
         "outDir": str(out_dir),
         "stream": actual_stream,
+        "sourceLabel": source_label,
         "framesPerPanorama": frames_per_panorama,
         "inputFrames": len(frames),
         "panoramaCount": len(groups),
         "droppedTailFrames": len(frames) % frames_per_panorama,
         "expectedFrameSize": "any" if expected_frame_size is None else f"{expected_frame_size[0]}x{expected_frame_size[1]}",
         "orientLikeLivePanorama": orient,
+        "orientation": "rotate_ccw_90_then_horizontal_mirror" if orient else "none",
         "reverseOrder": reverse,
         "panoramas": [],
     }
@@ -154,8 +166,8 @@ def stitch_raw_folder(
             FrameRecord(actual_stream, 0, idx + 1, path)
             for idx, path in enumerate(ordered_paths)
         ]
-        pano_name = f"{prefix}_115_pano_{group_idx:04d}.tiff"
-        preview_name = f"{prefix}_115_pano_{group_idx:04d}_preview.jpg"
+        pano_name = f"{prefix}_{source_label}_pano_{group_idx:04d}.tiff"
+        preview_name = f"{prefix}_{source_label}_pano_{group_idx:04d}_preview.jpg"
         pano_path = out_dir / pano_name
         preview_path = out_dir / preview_name
         pano_w, pano_h, uncompressed_bytes = stitch_group(
@@ -191,7 +203,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--expected-frame-size", type=parse_size, default=(4096, 4096), help="Default 4096x4096; use 'any' to disable")
     p.add_argument("--preview-width", type=int, default=8192, help="Preview JPG width. Default: 8192")
     p.add_argument("--preview-quality", type=int, default=95, help="Preview JPG quality 1-100. Default: 95")
-    p.add_argument("--no-orient", action="store_true", help="Do not rotate/mirror frames before stitching")
+    p.add_argument("--no-orient", action="store_true", help="Disable UI orientation. Default first rotates CCW 90 degrees, then horizontally mirrors each raw frame before stitching.")
     p.add_argument("--reverse", action="store_true", help="Reverse each 16-frame group before stitching")
     return p
 

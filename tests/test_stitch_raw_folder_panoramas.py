@@ -11,14 +11,24 @@ import stitch_raw_folder_panoramas as stitch
 class StitchRawFolderPanoramasTests(unittest.TestCase):
     def test_smb_uri_candidates_use_gvfs_share_layout(self):
         candidates = stitch.smb_uri_to_gvfs_candidates(
-            "smb://tg-ds2309.local/data/raw/20260608/RGB/115",
+            "smb://tg-ds2309.local/data/raw/20260608/RGB/1153",
             uid=1000,
         )
 
         self.assertEqual(
             candidates[0],
-            Path("/run/user/1000/gvfs/smb-share:server=tg-ds2309.local,share=data/raw/20260608/RGB/115"),
+            Path("/run/user/1000/gvfs/smb-share:server=tg-ds2309.local,share=data/raw/20260608/RGB/1153"),
         )
+
+    def test_default_source_points_to_1153_folder(self):
+        self.assertEqual(
+            stitch.DEFAULT_SOURCE,
+            "smb://tg-ds2309.local/data/raw/20260608/RGB/1153",
+        )
+
+    def test_output_label_uses_source_folder_name(self):
+        self.assertEqual(stitch.folder_label_from_source(Path("/mnt/raw/RGB/1153")), "1153")
+        self.assertEqual(stitch.safe_label("1153 raw"), "1153_raw")
 
     def test_list_image_files_sorts_by_trailing_index(self):
         with tempfile.TemporaryDirectory() as tmp:
