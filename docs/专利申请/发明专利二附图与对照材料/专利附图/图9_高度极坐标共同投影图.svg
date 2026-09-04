@@ -1,0 +1,79 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,4 L0,8 Z" fill="#000"/></marker></defs>
+<style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#000}.box{fill:#fff;stroke:#000;stroke-width:2}.thin{fill:none;stroke:#000;stroke-width:1.5}.line{fill:none;stroke:#000;stroke-width:2}.dash{fill:none;stroke:#000;stroke-width:2;stroke-dasharray:9 7}.arrow{fill:none;stroke:#000;stroke-width:2;marker-end:url(#arrow)}.small{font-size:18px}.normal{font-size:22px}.large{font-size:27px;font-weight:600}.mono{font-family:monospace;font-size:18px}</style>
+<rect x="1" y="1" width="1398" height="898" fill="#fff" stroke="none"/>
+<text x="700" y="45" text-anchor="middle" class="large" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">纵向视场角、高度角与极坐标半径的共同变换</tspan>
+</text>
+<rect x="65" y="115" width="430" height="560" rx="10" class="box"/>
+<text x="78" y="140" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="78" dy="0">901</tspan>
+</text>
+<text x="280.0" y="402.35" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="280.0" dy="0"> </tspan>
+</text>
+<text x="280" y="145" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="280" dy="0">全景纵向</tspan>
+<tspan x="280" dy="24">Hp=4096</tspan>
+<tspan x="280" dy="24">对应线阵Sensor Width轴</tspan>
+</text>
+<line x1="110" y1="250" x2="450" y2="250" stroke="#000" stroke-width="2"/>
+<line x1="110" y1="390" x2="450" y2="390" stroke="#000" stroke-width="2" stroke-dasharray="9 7"/>
+<line x1="110" y1="560" x2="450" y2="560" stroke="#000" stroke-width="2"/>
+<text x="125" y="237" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="125" dy="0">v=0，βrel≈+13.44°</tspan>
+</text>
+<text x="125" y="378" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="125" dy="0">cy=2047.5，βrel=0°</tspan>
+</text>
+<text x="125" y="590" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="125" dy="0">v=4095，βrel≈-13.44°</tspan>
+</text>
+<circle cx="335" cy="310" r="11" fill="black" stroke="#000" stroke-width="2"/>
+<text x="350" y="316" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="350" dy="0">目标点</tspan>
+</text>
+<text x="280" y="640" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="280" dy="0">已知FOVv=26.88°（对应panoY/Sensor Width轴）</tspan>
+</text>
+<rect x="545" y="185" width="320" height="330" rx="10" class="box"/>
+<text x="558" y="210" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="558" dy="0">902</tspan>
+</text>
+<text x="705.0" y="292.525" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="705.0" dy="0">共同标定变换</tspan>
+<tspan x="705.0" dy="25">fy=Hp/[2tan(FOVv/2)]</tspan>
+<tspan x="705.0" dy="25">β=atan2(cy-vu,fy)</tspan>
+<tspan x="705.0" dy="25">ρ=ρmin+(β-βmin)</tspan>
+<tspan x="705.0" dy="25">/(βmax-βmin)×</tspan>
+<tspan x="705.0" dy="25">(ρmax-ρmin)</tspan>
+</text>
+<line x1="495" y1="330" x2="545" y2="330" class="line"/>
+<polygon points="545,330 532.00,336.00 532.00,324.00" fill="#000"/>
+<circle cx="1110" cy="370" r="245" fill="white" stroke="#000" stroke-width="2"/>
+<circle cx="1110" cy="370" r="80" fill="white" stroke="#000" stroke-width="2"/>
+<circle cx="1110" cy="370" r="165" fill="white" stroke="#000" stroke-width="2" stroke-dasharray="9 7"/>
+<text x="1110" y="105" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1110" dy="0">外圈：较高高度角</tspan>
+</text>
+<text x="1110" y="680" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1110" dy="0">内圈：较低高度角</tspan>
+</text>
+<circle cx="1165" cy="235" r="11" fill="black" stroke="#000" stroke-width="2"/>
+<text x="1185" y="230" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1185" dy="0">事件半径ρ(β)</tspan>
+</text>
+<line x1="865" y1="350" x2="900" y2="350" class="line"/>
+<polygon points="900,350 887.00,356.00 887.00,344.00" fill="#000"/>
+<rect x="260" y="735" width="880" height="75" rx="10" class="box"/>
+<text x="273" y="760" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="273" dy="0">903</tspan>
+</text>
+<text x="700.0" y="779.15" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700.0" dy="0">背景逆采样v(β)与事件半径ρ(β)必须使用同一组参数；半径不表示目标距离或物理高度</tspan>
+</text>
+<text x="700.0" y="876" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="700.0" dy="0">图9</tspan>
+</text>
+</svg>

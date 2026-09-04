@@ -53,6 +53,8 @@ public:
 
     QImage snapshotThumbRgb() const;
     QImage snapshotThumbBw() const;
+    QImage snapshotFullRgb() const;
+    QImage snapshotFullBw() const;
 
     QImage extractFullRgbSliceByAngle(double angleDeg) const;
     QImage extractFullBwSliceByAngle(double angleDeg, bool allow180Fallback) const;
@@ -66,6 +68,11 @@ public:
     QImage extractFullBwWindow(double centerAngleDeg, int windowW) const;
     QImage extractThumbRgbWindow(double centerAngleDeg, int windowW) const;
     QImage extractThumbBwWindow(double centerAngleDeg, int windowW) const;
+
+    // Square target crop in panorama coordinates. X wraps around the 360-degree
+    // panorama; only rows outside the camera image are padded with black.
+    QImage extractFullRgbCrop(int centerX, int centerY, int cropSize) const;
+    QImage extractFullBwCrop(int centerX, int centerY, int cropSize) const;
 
     bool copyFullRgbTile(int tileIndex, QImage &out) const;
     bool copyFullBwTile(int tileIndex, QImage &out) const;
@@ -122,9 +129,11 @@ private:
 
     void pushFrameInternal(Stream &s, const QImage &frame, bool isRgb, quint64 fileIndex, const QString &sourcePath, qint64 rxMs, double angleDeg);
     QImage snapshotInternalThumb(const Stream &s) const;
+    QImage snapshotInternalFull(const Stream &s) const;
     QImage extractSliceInternal(const Stream &s, double angleDeg, bool allow180Fallback) const;
     QImage extractThumbSliceInternal(const Stream &s, double angleDeg, bool allow180Fallback) const;
     QImage extractWindowInternal(const Stream &s, bool full, double centerAngleDeg, int windowW) const;
+    QImage extractFullCropInternal(const Stream &s, int centerX, int centerY, int cropSize) const;
     BlockState stateInternal(const Stream &s, bool full) const;
     ThumbInfo thumbInfoInternal(const Stream &s) const;
     QVector<int> takeDirtyThumbTilesInternal(Stream &s);

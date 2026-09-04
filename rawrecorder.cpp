@@ -1,11 +1,145 @@
 #include "rawrecorder.h"
 
+#include <QBuffer>
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include <QImageReader>
+#include <QImageWriter>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPainter>
 #include "asciipath.h"
+
+namespace {
+constexpr int kHalfFrameCount = 8;
+constexpr int kJpegQuality = 95;
+
+static QString numU64(quint64 v)
+{
+    return QString::fromLatin1(QByteArray::number(v));
+}
+
+static QString numI64(qint64 v)
+{
+    return QString::fromLatin1(QByteArray::number(v));
+}
+
+static QString normalizedStream(QString stream)
+{
+    stream = stream.trimmed().toUpper();
+    if (stream == QStringLiteral("GRAY")) stream = QStringLiteral("BW");
+    if (stream != QStringLiteral("RGB") && stream != QStringLiteral("BW")) stream = QStringLiteral("UNK");
+    return stream;
+}
+
+static QImage orientFrame(const QImage &src)
+{
+    if (src.isNull()) return QImage();
+    QImage in = src.convertToFormat(QImage::Format_RGB32);
+    const int w = in.width();
+    const int h = in.height();
+    if (w <= 0 || h <= 0) return QImage();
+
+    QImage out(h, w, QImage::Format_RGB32);
+    if (out.isNull()) return QImage();
+    for (int y = 0; y < h; ++y) {
+        const QRgb *srcLine = reinterpret_cast<const QRgb*>(in.constScanLine(y));
+        const int dx = h - 1 - y;
+        for (int x = 0; x < w; ++x) {
+            const int dy = w - 1 - x;
+            QRgb *dstLine = reinterpret_cast<QRgb*>(out.scanLine(dy));
+            dstLine[dx] = srcLine[x];
+        }
+    }
+    return out;
+}
+
+static QImage decodeJpegBytes(const QByteArray &bytes)
+{
+    if (bytes.isEmpty()) return QImage();
+    QBuffer buf;
+    buf.setData(bytes);
+    if (!buf.open(QIODevice::ReadOnly)) return QImage();
+    QImageReader reader(&buf);
+    QImage img = reader.read();
+    if (img.isNull()) return QImage();
+    return img.convertToFormat(QImage::Format_RGB32);
+}
+
+static QImage stitchHalfPanorama(const QVector<RawRecorder::BufferedFrame> &frames)
+{
+    if (frames.isEmpty()) return QImage();
+
+    QVector<QImage> oriented;
+    oriented.reserve(frames.size());
+    int frameW = 0;
+    int frameH = 0;
+    for (int i = frames.size() - 1; i >= 0; --i) {
+        QImage img = orientFrame(frames.at(i).image);
+        if (img.isNull()) return QImage();
+        if (oriented.isEmpty()) {
+            frameW = img.width();
+            frameH = img.height();
+        } else if (img.width() != frameW || img.height() != frameH) {
+            return QImage();
+        }
+        oriented.push_back(img);
+    }
+
+    QImage out(frameW * oriented.size(), frameH, QImage::Format_RGB32);
+    if (out.isNull()) return QImage();
+    out.fill(Qt::black);
+    QPainter p(&out);
+    int x = 0;
+    for (const QImage &img : oriented) {
+        p.drawImage(x, 0, img);
+        x += img.width();
+    }
+    p.end();
+    return out;
+}
+
+static bool parseSourceDateTime(const QString &sourceName, qint64 fallbackMs, QDateTime *dt)
+{
+    const QString stem = QFileInfo(sourceName).completeBaseName();
+    const QStringList parts = stem.split(QLatin1Char('_'));
+    if (parts.size() >= 3) {
+        const QDate date = QDate::fromString(parts.at(1), QStringLiteral("yyyyMMdd"));
+        const QTime time = QTime::fromString(parts.at(2).left(6), QStringLiteral("HHmmss"));
+        if (date.isValid() && time.isValid()) {
+            if (dt) *dt = QDateTime(date, time);
+            return true;
+        }
+    }
+    if (dt) *dt = QDateTime::fromMSecsSinceEpoch(fallbackMs > 0 ? fallbackMs : QDateTime::currentMSecsSinceEpoch());
+    return false;
+}
+
+static QString sourceBaseStem(const RawRecorder::BufferedFrame &frame, const QString &stream)
+{
+    QString stem = QFileInfo(frame.sourceName).completeBaseName().trimmed();
+    if (!stem.isEmpty()) return stem;
+
+    QDateTime dt;
+    parseSourceDateTime(frame.sourceName, frame.rxMs, &dt);
+    const QString idx = frame.fileIdx > 0 ? numU64(frame.fileIdx) : numI64(frame.rxMs);
+    return QStringLiteral("%1_%2_%3_%4")
+        .arg(stream)
+        .arg(dt.date().toString(QStringLiteral("yyyyMMdd")))
+        .arg(dt.time().toString(QStringLiteral("HHmmss")))
+        .arg(idx);
+}
+
+static QString outputDirForFrame(const QString &rootDir, const QString &stream, const RawRecorder::BufferedFrame &frame)
+{
+    QDateTime dt;
+    parseSourceDateTime(frame.sourceName, frame.rxMs, &dt);
+    const QString day = dt.date().toString(QStringLiteral("yyyyMMdd"));
+    const QString hour = dt.time().toString(QStringLiteral("HH"));
+    return QDir(rootDir).filePath(day + QStringLiteral("/") + stream.toLower() + QStringLiteral("/") + hour);
+}
+} // namespace
 
 RawRecorder::RawRecorder(QObject *parent) : QObject(parent)
 {
@@ -21,16 +155,6 @@ void RawRecorder::queueStats(int *count, qint64 *bytes)
     if (bytes) *bytes = b;
 }
 
-static QString numU64(quint64 v)
-{
-    return QString::fromLatin1(QByteArray::number(v));
-}
-
-static QString numI64(qint64 v)
-{
-    return QString::fromLatin1(QByteArray::number(v));
-}
-
 void RawRecorder::startRecording(const QString &rootDir, int rollMinutes)
 {
     QMutexLocker lk(&m_mtx);
@@ -42,8 +166,11 @@ void RawRecorder::startRecording(const QString &rootDir, int rollMinutes)
     m_seq = 0;
     m_indexUnflushedCount = 0;
     m_lastFlushMs = 0;
+    m_rgbState = StreamState();
+    m_bwState = StreamState();
+    m_jobs.clear();
     if (m_indexFile.isOpen()) m_indexFile.close();
-    emit logRequested(QStringLiteral("REC"), QStringLiteral("Start: %1").arg(m_rootDir), QStringLiteral("#569CD6"));
+    emit logRequested(QStringLiteral("REC"), QStringLiteral("Start AB JPG: %1").arg(m_rootDir), QStringLiteral("#569CD6"));
 }
 
 void RawRecorder::stopRecording()
@@ -53,9 +180,13 @@ void RawRecorder::stopRecording()
     const int leftCount = m_jobs.size();
     qint64 leftBytes = 0;
     for (const Job &j : m_jobs) leftBytes += j.bytes.size();
+    const int leftFrames = m_rgbState.frames.size() + m_bwState.frames.size();
+    m_jobs.clear();
+    m_rgbState = StreamState();
+    m_bwState = StreamState();
     if (m_indexFile.isOpen()) m_indexFile.close();
     emit logRequested(QStringLiteral("REC"),
-        QStringLiteral("Stop (dropped queue: %1 jobs, %2 KB)").arg(leftCount).arg(leftBytes / 1024),
+        QStringLiteral("Stop (dropped queue: %1 jobs, %2 KB, buffered frames: %3)").arg(leftCount).arg(leftBytes / 1024).arg(leftFrames),
         QStringLiteral("#569CD6"));
 }
 
@@ -101,110 +232,90 @@ void RawRecorder::process()
     }
 
     const qint64 nowMs = (job.rxMs > 0) ? job.rxMs : QDateTime::currentMSecsSinceEpoch();
-    rollIfNeeded(nowMs);
-
-    QString subDir = job.stream.trimmed().toUpper();
-    if (subDir != QStringLiteral("RGB") && subDir != QStringLiteral("BW") && subDir != QStringLiteral("GRAY")) subDir = QStringLiteral("UNK");
-    if (subDir == QStringLiteral("GRAY")) subDir = QStringLiteral("BW");
-
-    QString ext = job.ext.trimmed().toLower();
-    if (ext.isEmpty()) ext = QStringLiteral("bin");
-    ext = safeAsciiComponent(ext, QStringLiteral("bin"));
-
-    quint64 seq = 0;
-    QString outDir;
-    {
-        QMutexLocker lk(&m_mtx);
-        seq = ++m_seq;
-        outDir = m_sessionDir;
-    }
-    if (outDir.isEmpty()) {
-        emit logRequested(QStringLiteral("REC"), QStringLiteral("Session not ready"), QStringLiteral("#F44336"));
+    const QString stream = normalizedStream(job.stream);
+    if (stream == QStringLiteral("UNK")) {
+        emit logRequested(QStringLiteral("REC"), QStringLiteral("Unknown stream: %1").arg(job.stream), QStringLiteral("#F44336"));
         schedule();
         return;
     }
 
-    const QString dstDir = QDir(outDir).filePath(subDir.toLower());
-    if (!QDir().mkpath(dstDir)) {
-        emit logRequested(QStringLiteral("REC"), QStringLiteral("Dir create failed: %1").arg(dstDir), QStringLiteral("#F44336"));
+    QImage decoded = decodeJpegBytes(job.bytes);
+    if (decoded.isNull()) {
+        emit logRequested(QStringLiteral("REC"), QStringLiteral("Decode failed: %1").arg(job.srcPath), QStringLiteral("#F44336"));
         schedule();
         return;
     }
 
-    const QString name = (job.fileIdx > 0)
-        ? (numU64(job.fileIdx) + QStringLiteral("_") + numI64(nowMs) + QStringLiteral(".") + ext)
-        : (QStringLiteral("seq_") + numU64(seq) + QStringLiteral("_") + numI64(nowMs) + QStringLiteral(".") + ext);
-    const QString dstPath = QDir(dstDir).filePath(name);
-
-    QFile f(dstPath);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        emit logRequested(QStringLiteral("REC"), QStringLiteral("Write failed: %1").arg(dstPath), QStringLiteral("#F44336"));
-        schedule();
-        return;
-    }
-    f.write(job.bytes);
-    f.close();
-
-    {
-        QMutexLocker lk(&m_mtx);
-        if (m_indexFile.isOpen()) {
-            QJsonObject o;
-            o.insert(QStringLiteral("t"), nowMs);
-            o.insert(QStringLiteral("stream"), subDir);
-            o.insert(QStringLiteral("fileIdx"), (qint64)job.fileIdx);
-            o.insert(QStringLiteral("file"), QDir(subDir.toLower()).filePath(name));
-            o.insert(QStringLiteral("bytes"), (qint64)job.bytes.size());
-            o.insert(QStringLiteral("src"), job.srcPath);
-            o.insert(QStringLiteral("sender"), job.sender);
-            m_indexFile.write(QJsonDocument(o).toJson(QJsonDocument::Compact));
-            m_indexFile.write("\n");
-            ++m_indexUnflushedCount;
-            const qint64 sinceFlush = nowMs - m_lastFlushMs;
-            if (m_indexUnflushedCount >= 32 || sinceFlush >= 250) {
-                m_indexFile.flush();
-                m_indexUnflushedCount = 0;
-                m_lastFlushMs = nowMs;
-            }
-        }
-    }
+    BufferedFrame frame;
+    frame.image = decoded;
+    frame.sourceName = QFileInfo(job.srcPath).fileName();
+    frame.sourcePath = job.srcPath;
+    frame.fileIdx = job.fileIdx;
+    frame.rxMs = nowMs;
+    processDecodedFrame(stream, frame, nowMs);
 
     schedule();
 }
 
-void RawRecorder::rollIfNeeded(qint64 nowMs)
+bool RawRecorder::processDecodedFrame(const QString &stream, const BufferedFrame &frame, qint64 nowMs)
 {
-    bool needNew = false;
-    {
-        QMutexLocker lk(&m_mtx);
-        if (!m_enabled) return;
-        if (m_sessionStartMs <= 0 || m_sessionDir.isEmpty()) needNew = true;
-        else if (m_rollMinutes > 0 && (nowMs - m_sessionStartMs) >= (qint64)m_rollMinutes * 60 * 1000) needNew = true;
+    StreamState *state = nullptr;
+    if (stream == QStringLiteral("RGB")) state = &m_rgbState;
+    else if (stream == QStringLiteral("BW")) state = &m_bwState;
+    if (!state) return false;
+
+    state->frames.push_back(frame);
+    while (state->frames.size() >= kHalfFrameCount) {
+        QVector<BufferedFrame> halfFrames;
+        halfFrames.reserve(kHalfFrameCount);
+        for (int i = 0; i < kHalfFrameCount; ++i) halfFrames.push_back(state->frames.at(i));
+        state->frames.erase(state->frames.begin(), state->frames.begin() + kHalfFrameCount);
+        if (!writeHalfPanorama(stream, *state, halfFrames, nowMs)) return false;
     }
-    if (needNew) openNewSession(nowMs);
+    return true;
 }
 
-bool RawRecorder::openNewSession(qint64 nowMs)
+bool RawRecorder::writeHalfPanorama(const QString &stream, StreamState &state, const QVector<BufferedFrame> &halfFrames, qint64 nowMs)
 {
-    const QDateTime dt = QDateTime::fromMSecsSinceEpoch(nowMs);
-    const QString ts = makeAsciiTimestamp(dt, QStringLiteral("REC2_"));
-    const QString sessionDir = QDir(m_rootDir).filePath(ts);
-    if (!QDir().mkpath(QDir(sessionDir).filePath(QStringLiteral("rgb"))) ||
-        !QDir().mkpath(QDir(sessionDir).filePath(QStringLiteral("bw")))) {
-        emit logRequested(QStringLiteral("REC"), QStringLiteral("Dir create failed: %1").arg(sessionDir), QStringLiteral("#F44336"));
+    if (halfFrames.size() != kHalfFrameCount) return false;
+    if (state.nextHalfA || state.groupBaseStem.isEmpty()) {
+        state.groupBaseStem = sourceBaseStem(halfFrames.first(), stream);
+        ++state.groupIndex;
+    }
+
+    const QString suffix = state.nextHalfA ? QStringLiteral("A") : QStringLiteral("B");
+    const QString dstDir = outputDirForFrame(m_rootDir, stream, halfFrames.first());
+    if (!QDir().mkpath(dstDir)) {
+        emit logRequested(QStringLiteral("REC"), QStringLiteral("Dir create failed: %1").arg(dstDir), QStringLiteral("#F44336"));
         return false;
     }
 
-    QMutexLocker lk(&m_mtx);
-    if (m_indexFile.isOpen()) m_indexFile.close();
-    m_indexFile.setFileName(QDir(sessionDir).filePath(QStringLiteral("index.jsonl")));
-    if (!m_indexFile.open(QIODevice::WriteOnly | QIODevice::Append)) {
-        emit logRequested(QStringLiteral("REC"), QStringLiteral("Index open failed: %1").arg(sessionDir), QStringLiteral("#F44336"));
+    QImage pano = stitchHalfPanorama(halfFrames);
+    if (pano.isNull()) {
+        emit logRequested(QStringLiteral("REC"), QStringLiteral("Stitch failed: %1 %2").arg(stream, state.groupBaseStem), QStringLiteral("#F44336"));
         return false;
     }
-    m_sessionStartMs = nowMs;
-    m_sessionDir = sessionDir;
-    m_indexUnflushedCount = 0;
-    m_lastFlushMs = nowMs;
-    emit logRequested(QStringLiteral("REC"), QStringLiteral("Roll: %1").arg(m_sessionDir), QStringLiteral("#6A9955"));
+
+    const QString fileName = state.groupBaseStem + QStringLiteral("-") + suffix + QStringLiteral(".jpg");
+    const QString dstPath = QDir(dstDir).filePath(fileName);
+    QImageWriter writer(dstPath, "jpg");
+    writer.setQuality(kJpegQuality);
+    if (!writer.write(pano)) {
+        emit logRequested(QStringLiteral("REC"), QStringLiteral("Write failed: %1 (%2)").arg(dstPath, writer.errorString()), QStringLiteral("#F44336"));
+        return false;
+    }
+
+    emit logRequested(QStringLiteral("REC"),
+        QStringLiteral("AB %1 group=%2 half=%3 frames=%4 file=%5")
+            .arg(stream)
+            .arg((qulonglong)state.groupIndex)
+            .arg(suffix)
+            .arg(halfFrames.size())
+            .arg(dstPath),
+        QStringLiteral("#6A9955"));
+
+    if (!state.nextHalfA) state.groupBaseStem.clear();
+    state.nextHalfA = !state.nextHalfA;
+    Q_UNUSED(nowMs);
     return true;
 }

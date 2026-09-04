@@ -20,6 +20,7 @@
 #include <QSharedPointer>
 #include <QAtomicInteger>
 #include <QFile>
+#include <QStackedWidget>
 
 // 先引入组件头文件
 #include "panoramawidget.h"
@@ -33,6 +34,11 @@
 
 namespace Ui { class MainWindow; }
 class RawRecorder;
+class CompactTargetRadarPanel;
+class TargetRadarWindow;
+#ifdef DMX_ADVANCED_DETECTION
+class DirectYoloManager;
+#endif
 
 // Main-thread angle history used to place frames by receive-time lookup.
 class AngleHistory
@@ -168,9 +174,21 @@ private slots:
     void onSaveFullPanoramaClicked();
     void onSaveFullPanoramaFinished(quint64 saveId, bool ok, const QString &msg, const QString &outDir);
     void onToggleRecording();
+    void onOpenTargetRadarWindow();
 
     void onCommandReplyReceived();
     void onPathReceived(const QString &type, const QString &path, const QString &sender, qint64 rxMs);
+    void onCandidateDetected(const QString &stream, double angle, int panoX, int panoY, double score, const QString &cropPath,
+                             int roiBoxX1, int roiBoxY1, int roiBoxX2, int roiBoxY2,
+                             const QString &className);
+    void onStaticClutterDetected(const QString &stream,
+                                 const QString &className,
+                                 int panoX,
+                                 int panoY,
+                                 int trackId,
+                                 int stableHits,
+                                 double contextScore,
+                                 const QString &cropPath);
 
     void onPanoramaClicked(double angle);
     void onRadarClicked(int angle);
@@ -195,23 +213,34 @@ private:
     void stopRecordingNow();
     void updateRecordActionText();
     static bool crossedZero(double prevAngleDeg, double currentAngleDeg);
+    void updateReplaySweep(double angleDeg);
+    void advanceReplaySweep();
 
     void sendCommand(const QString &cmd);
     void checkTargetDetection(double currentAngle);
     void initSimulatedTargets();
+    void pruneDetectedRadarTargets(qint64 nowMs, bool removeScanned);
+    bool scanCrossedAngle(double prevAngleDeg, double currentAngleDeg, double targetAngleDeg) const;
+    void updateTargetRadarBackground();
+    void replaceCandidateCropFromPanorama(const QString &stream,
+                                          int panoX,
+                                          int panoY,
+                                          const QString &cropPath);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
 
 private:
     Ui::MainWindow *ui;
+    QStackedWidget *m_pageStack = nullptr;
+    QWidget *m_legacyPage = nullptr;
 
     // UI 组件
     PanoramaWidget *panoramaView;
     PanoramaWidget *thermalPanoramaView;
     AIVideoWidget *colorRoiView;
     AIVideoWidget *thermalRoiView;
-    AIVideoWidget *captureView;
+    CompactTargetRadarPanel *m_compactTargetRadar = nullptr;
     RadarWidget *radarView;
     AIVideoWidget *radarFeedbackView;
 
@@ -227,6 +256,9 @@ private:
     VideoThread *m_pathThread;
     VideoThread *m_colorThread;
     VideoThread *m_thermalThread;
+#ifdef DMX_ADVANCED_DETECTION
+    DirectYoloManager *m_directYoloManager = nullptr;
+#endif
 
     TurntableDriver *m_driver;
     TurntableControlDialog *m_ctrlDialog;
@@ -243,10 +275,18 @@ private:
     bool m_panoBwDirty = false;
 
     bool m_isDeviceOpen;
+    bool m_replayMode = false;
+    QTimer *m_replaySweepTimer = nullptr;
+    QElapsedTimer m_replaySweepClock;
+    double m_replaySweepAngleDeg = 0.0;
+    bool m_replayMappingLogged = false;
     bool m_waitingForRunAngle = false;
     double m_latestAngle;
     double m_prevCheckAngle;
+    double m_prevRadarSweepAngle = -1.0;
     QVector<RadarTarget> m_simTargets;
+    QVector<qint64> m_detectTargetMs;
+    qint64 m_lastDetectAutoSwitchMs = 0;
     bool m_zeroAngleInited = false;
     double m_zeroAngleRaw = 0.0;
     AngleHistory m_angleHistory;
@@ -255,7 +295,6 @@ private:
     qint64 m_captureLatencyBwMs = 0;
     bool m_angleLookup = true;
     qint64 m_lastAngleDiagMs = 0;
-    double m_pendingCaptureAngle = 0.0;
     QImage m_lastColorRoi;
     QImage m_lastThermalRoi;
     double m_lastRoiAngle = -1.0;
@@ -276,6 +315,7 @@ private:
     QAction *m_actClearImage;
     QAction *m_actSaveFullPanorama;
     QAction *m_actRecord;
+    QAction *m_actTargetRadar;
     QAction *m_actExit;
 
     QThread *m_saveThread = nullptr;
@@ -292,6 +332,9 @@ private:
     double m_recordPendingPrevAngle = 0.0;
 
     QFile *m_logFile = nullptr;
+    TargetRadarWindow *m_targetRadarWindow = nullptr;
+    quint64 m_targetRadarSeq = 0;
+    qint64 m_lastTargetRadarBgMs = 0;
 };
 
 #endif // MAINWINDOW_H

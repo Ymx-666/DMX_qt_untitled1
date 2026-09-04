@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1120" viewBox="0 0 1400 1120">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,4 L0,8 Z" fill="#000"/></marker></defs>
+<style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#000}.box{fill:#fff;stroke:#000;stroke-width:2}.thin{fill:none;stroke:#000;stroke-width:1.5}.line{fill:none;stroke:#000;stroke-width:2}.dash{fill:none;stroke:#000;stroke-width:2;stroke-dasharray:9 7}.arrow{fill:none;stroke:#000;stroke-width:2;marker-end:url(#arrow)}.small{font-size:18px}.normal{font-size:22px}.large{font-size:27px;font-weight:600}.mono{font-family:monospace;font-size:18px}</style>
+<rect x="1" y="1" width="1398" height="1118" fill="#fff" stroke="none"/>
+<text x="700" y="42" text-anchor="middle" class="large" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">目标事件融合与极坐标显示方法流程</tspan>
+</text>
+<rect x="490" y="80" width="420" height="80" rx="10" class="box"/>
+<text x="503" y="105" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="503" dy="0">S101</tspan>
+</text>
+<text x="700.0" y="127.35" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700.0" dy="0">接收双通道异步检测记录</tspan>
+</text>
+<rect x="490" y="190" width="420" height="80" rx="10" class="box"/>
+<text x="503" y="215" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="503" dy="0">S102</tspan>
+</text>
+<text x="700.0" y="223.17499999999998" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700.0" dy="0">映射环形全景坐标</tspan>
+<tspan x="700.0" dy="28">计算相对高度角</tspan>
+</text>
+<rect x="490" y="300" width="420" height="80" rx="10" class="box"/>
+<text x="503" y="325" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="503" dy="0">S103</tspan>
+</text>
+<text x="700.0" y="333.175" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700.0" dy="0">取得扫描周期T</tspan>
+<tspan x="700.0" dy="28">确定通道相位关系</tspan>
+</text>
+<rect x="490" y="410" width="420" height="80" rx="10" class="box"/>
+<text x="503" y="435" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="503" dy="0">S104</tspan>
+</text>
+<text x="700.0" y="443.175" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700.0" dy="0">划分近时、相位延迟</tspan>
+<tspan x="700.0" dy="28">及跨圈重访关系</tspan>
+</text>
+<line x1="700" y1="160" x2="700" y2="190" class="line"/>
+<polygon points="700,190 694.00,177.00 706.00,177.00" fill="#000"/>
+<line x1="700" y1="270" x2="700" y2="300" class="line"/>
+<polygon points="700,300 694.00,287.00 706.00,287.00" fill="#000"/>
+<line x1="700" y1="380" x2="700" y2="410" class="line"/>
+<polygon points="700,410 694.00,397.00 706.00,397.00" fill="#000"/>
+<polygon points="700,530 875,610 700,690 525,610" class="box"/>
+<text x="700" y="600" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">来源帧标识</tspan>
+<tspan x="700" dy="28">是否相同？</tspan>
+</text>
+<line x1="700" y1="490" x2="700" y2="530" class="line"/>
+<polygon points="700,530 694.00,517.00 706.00,517.00" fill="#000"/>
+<text x="900" y="590" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="900" dy="0">是</tspan>
+</text>
+<polyline points="875,610 1050,610 1050,735" class="line"/>
+<polygon points="1050,735 1044.00,722.00 1056.00,722.00" fill="#000"/>
+<rect x="920" y="735" width="260" height="85" rx="10" class="box"/>
+<text x="933" y="760" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="933" dy="0">S105</tspan>
+</text>
+<text x="1050.0" y="770.6750000000001" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1050.0" dy="0">禁止关联</tspan>
+<tspan x="1050.0" dy="28">保留为不同事件</tspan>
+</text>
+<text x="510" y="590" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="510" dy="0">否</tspan>
+</text>
+<polyline points="525,610 350,610 350,735" class="line"/>
+<polygon points="350,735 344.00,722.00 356.00,722.00" fill="#000"/>
+<rect x="210" y="735" width="280" height="85" rx="10" class="box"/>
+<text x="223" y="760" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="223" dy="0">S106</tspan>
+</text>
+<text x="350.0" y="771.3249999999999" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="350.0" dy="0">计算方位/高度角/时间</tspan>
+<tspan x="350.0" dy="25">形态/外观/类别代价</tspan>
+</text>
+<polygon points="700,735 850,805 700,875 550,805" class="box"/>
+<text x="700" y="798" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">是否存在</tspan>
+<tspan x="700" dy="28">合格事件？</tspan>
+</text>
+<line x1="490" y1="778" x2="550" y2="790" class="line"/>
+<polygon points="550,790 536.08,793.33 538.43,781.57" fill="#000"/>
+<polyline points="1050,820 1050,880 760,880 760,915" class="line"/>
+<polygon points="760,915 754.00,902.00 766.00,902.00" fill="#000"/>
+<text x="910" y="870" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="910" dy="0">无其他候选时新建</tspan>
+</text>
+<rect x="460" y="915" width="320" height="85" rx="10" class="box"/>
+<text x="473" y="940" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="473" dy="0">S107</tspan>
+</text>
+<text x="620.0" y="964.85" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="620.0" dy="0"> </tspan>
+</text>
+<text x="635" y="950" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="635" dy="0">有合格事件：沿用ID并更新</tspan>
+<tspan x="635" dy="24">无合格事件：建立新事件</tspan>
+</text>
+<line x1="700" y1="875" x2="620" y2="915" class="line"/>
+<polygon points="620,915 628.94,903.82 634.31,914.55" fill="#000"/>
+<text x="520" y="875" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="520" dy="0">是：更新／否：新建</tspan>
+</text>
+<rect x="865" y="915" width="350" height="85" rx="10" class="box"/>
+<text x="878" y="940" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="878" dy="0">S108</tspan>
+</text>
+<text x="1040.0" y="964.85" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1040.0" dy="0"> </tspan>
+</text>
+<text x="1055" y="950" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1055" dy="0">同步变换背景和事件</tspan>
+<tspan x="1055" dy="25">生成高度极坐标态势图</tspan>
+</text>
+<line x1="780" y1="957" x2="865" y2="957" class="line"/>
+<polygon points="865,957 852.00,963.00 852.00,951.00" fill="#000"/>
+<text x="700.0" y="1096" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="700.0" dy="0">图2</tspan>
+</text>
+</svg>

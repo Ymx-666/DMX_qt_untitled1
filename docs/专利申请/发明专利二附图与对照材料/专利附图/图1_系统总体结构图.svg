@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,4 L0,8 Z" fill="#000"/></marker></defs>
+<style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#000}.box{fill:#fff;stroke:#000;stroke-width:2}.thin{fill:none;stroke:#000;stroke-width:1.5}.line{fill:none;stroke:#000;stroke-width:2}.dash{fill:none;stroke:#000;stroke-width:2;stroke-dasharray:9 7}.arrow{fill:none;stroke:#000;stroke-width:2;marker-end:url(#arrow)}.small{font-size:18px}.normal{font-size:22px}.large{font-size:27px;font-weight:600}.mono{font-family:monospace;font-size:18px}</style>
+<rect x="1" y="1" width="1398" height="898" fill="#fff" stroke="none"/>
+<text x="700" y="45" text-anchor="middle" class="large" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">周期周扫双成像通道目标事件融合与显示系统</tspan>
+</text>
+<rect x="55" y="125" width="210" height="105" rx="10" class="box"/>
+<text x="68" y="150" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="68" dy="0">101</tspan>
+</text>
+<text x="160.0" y="170.67499999999998" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="160.0" dy="0">第一成像通道</tspan>
+<tspan x="160.0" dy="28">RGB检测记录</tspan>
+</text>
+<rect x="55" y="300" width="210" height="105" rx="10" class="box"/>
+<text x="68" y="325" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="68" dy="0">102</tspan>
+</text>
+<text x="160.0" y="345.675" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="160.0" dy="0">第二成像通道</tspan>
+<tspan x="160.0" dy="28">BW检测记录</tspan>
+</text>
+<rect x="330" y="210" width="220" height="115" rx="10" class="box"/>
+<text x="343" y="235" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="343" dy="0">103</tspan>
+</text>
+<text x="440.0" y="260.675" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="440.0" dy="0">检测记录接收模块</tspan>
+<tspan x="440.0" dy="28">异步输入</tspan>
+</text>
+<line x1="265" y1="177" x2="330" y2="245" class="line"/>
+<polygon points="330,245 316.68,239.75 325.35,231.46" fill="#000"/>
+<line x1="265" y1="352" x2="330" y2="290" class="line"/>
+<polygon points="330,290 324.73,303.31 316.45,294.63" fill="#000"/>
+<rect x="615" y="105" width="250" height="115" rx="10" class="box"/>
+<text x="628" y="130" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="628" dy="0">104</tspan>
+</text>
+<text x="740.0" y="155.67499999999998" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="740.0" dy="0">统一环形坐标</tspan>
+<tspan x="740.0" dy="28">高度角归一化</tspan>
+</text>
+<rect x="615" y="280" width="250" height="115" rx="10" class="box"/>
+<text x="628" y="305" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="628" dy="0">105</tspan>
+</text>
+<text x="740.0" y="330.675" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="740.0" dy="0">扫描相位及</tspan>
+<tspan x="740.0" dy="28">同源帧互斥</tspan>
+</text>
+<line x1="550" y1="267" x2="615" y2="162" class="line"/>
+<polygon points="615,162 613.26,176.21 603.06,169.90" fill="#000"/>
+<line x1="550" y1="267" x2="615" y2="337" class="line"/>
+<polygon points="615,337 601.76,331.56 610.55,323.39" fill="#000"/>
+<rect x="930" y="195" width="235" height="125" rx="10" class="box"/>
+<text x="943" y="220" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="943" dy="0">106</tspan>
+</text>
+<text x="1047.5" y="250.67499999999998" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1047.5" dy="0">联合关联模块</tspan>
+<tspan x="1047.5" dy="28">门控与代价选择</tspan>
+</text>
+<line x1="865" y1="162" x2="930" y2="230" class="line"/>
+<polygon points="930,230 916.68,224.75 925.35,216.46" fill="#000"/>
+<line x1="865" y1="337" x2="930" y2="285" class="line"/>
+<polygon points="930,285 923.60,297.81 916.10,288.44" fill="#000"/>
+<rect x="930" y="430" width="235" height="120" rx="10" class="box"/>
+<text x="943" y="455" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="943" dy="0">107</tspan>
+</text>
+<text x="1047.5" y="483.175" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1047.5" dy="0">融合事件管理</tspan>
+<tspan x="1047.5" dy="28">稳定ID及生命周期</tspan>
+</text>
+<line x1="1047" y1="320" x2="1047" y2="430" class="line"/>
+<polygon points="1047,430 1041.00,417.00 1053.00,417.00" fill="#000"/>
+<rect x="590" y="620" width="250" height="115" rx="10" class="box"/>
+<text x="603" y="645" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="603" dy="0">108</tspan>
+</text>
+<text x="715.0" y="670.6750000000001" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="715.0" dy="0">原始/显示坐标</tspan>
+<tspan x="715.0" dy="28">分层模块</tspan>
+</text>
+<rect x="930" y="620" width="270" height="115" rx="10" class="box"/>
+<text x="943" y="645" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="943" dy="0">109</tspan>
+</text>
+<text x="1065.0" y="670.6750000000001" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1065.0" dy="0">高度极坐标投影</tspan>
+<tspan x="1065.0" dy="28">背景与事件共用变换</tspan>
+</text>
+<line x1="1047" y1="550" x2="770" y2="620" class="line"/>
+<polygon points="770,620 781.13,611.00 784.07,622.63" fill="#000"/>
+<line x1="840" y1="678" x2="930" y2="678" class="line"/>
+<polygon points="930,678 917.00,684.00 917.00,672.00" fill="#000"/>
+<rect x="80" y="620" width="300" height="115" rx="10" class="box"/>
+<text x="93" y="645" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="93" dy="0">110</tspan>
+</text>
+<text x="230.0" y="670.6750000000001" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="230.0" dy="0">全景背景</tspan>
+<tspan x="230.0" dy="28">RGB／BW／融合背景</tspan>
+</text>
+<polyline points="380,678 500,678 500,780 1065,780 1065,735" class="line"/>
+<polygon points="1065,735 1071.00,748.00 1059.00,748.00" fill="#000"/>
+<text x="700" y="815" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">输出：具有稳定事件标识和生命周期状态的非距离型极坐标态势图</tspan>
+</text>
+<text x="700.0" y="876" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="700.0" dy="0">图1</tspan>
+</text>
+</svg>

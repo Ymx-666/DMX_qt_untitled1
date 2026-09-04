@@ -8,7 +8,8 @@ mkdir -p build_linux
 cd build_linux
 
 echo "[1/2] qmake ..."
-qmake ../DMX.pro -spec linux-g++
+QMAKE_BIN="${QMAKE_BIN:-/usr/bin/qmake}"
+"$QMAKE_BIN" ../DMX.pro -spec linux-g++
 
 echo "[2/2] make -j$(nproc) ..."
 make -j$(nproc)

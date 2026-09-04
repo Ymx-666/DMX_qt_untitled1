@@ -6,6 +6,8 @@
 #include <QMutex>
 #include <QQueue>
 #include <QFile>
+#include <QImage>
+#include <QVector>
 
 class RawRecorder : public QObject
 {
@@ -13,6 +15,21 @@ class RawRecorder : public QObject
 public:
     explicit RawRecorder(QObject *parent = nullptr);
     void queueStats(int *count, qint64 *bytes);
+
+    struct BufferedFrame {
+        QImage image;
+        QString sourceName;
+        QString sourcePath;
+        quint64 fileIdx = 0;
+        qint64 rxMs = 0;
+    };
+
+    struct StreamState {
+        QVector<BufferedFrame> frames;
+        bool nextHalfA = true;
+        QString groupBaseStem;
+        quint64 groupIndex = 0;
+    };
 
 public slots:
     void startRecording(const QString &rootDir, int rollMinutes);
@@ -37,8 +54,8 @@ private:
     };
 
     void schedule();
-    void rollIfNeeded(qint64 nowMs);
-    bool openNewSession(qint64 nowMs);
+    bool processDecodedFrame(const QString &stream, const BufferedFrame &frame, qint64 nowMs);
+    bool writeHalfPanorama(const QString &stream, StreamState &state, const QVector<BufferedFrame> &halfFrames, qint64 nowMs);
 
     QMutex m_mtx;
     QQueue<Job> m_jobs;
@@ -53,6 +70,8 @@ private:
     quint64 m_seq = 0;
     quint64 m_indexUnflushedCount = 0;
     qint64 m_lastFlushMs = 0;
+    StreamState m_rgbState;
+    StreamState m_bwState;
 };
 
 #endif

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1030" viewBox="0 0 1400 1030">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,4 L0,8 Z" fill="#000"/></marker></defs>
+<style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#000}.box{fill:#fff;stroke:#000;stroke-width:2}.thin{fill:none;stroke:#000;stroke-width:1.5}.line{fill:none;stroke:#000;stroke-width:2}.dash{fill:none;stroke:#000;stroke-width:2;stroke-dasharray:9 7}.arrow{fill:none;stroke:#000;stroke-width:2;marker-end:url(#arrow)}.small{font-size:18px}.normal{font-size:22px}.large{font-size:27px;font-weight:600}.mono{font-family:monospace;font-size:18px}</style>
+<rect x="1" y="1" width="1398" height="1028" fill="#fff" stroke="none"/>
+<text x="700" y="45" text-anchor="middle" class="large" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">真实日志中的三类事件关联示例</tspan>
+</text>
+<rect x="70" y="100" width="1260" height="205" rx="10" class="box"/>
+<text x="83" y="125" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="83" dy="0">1001</tspan>
+</text>
+<text x="700.0" y="169.0" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700.0" dy="0">示例一：同源帧互斥</tspan>
+<tspan x="700.0" dy="27">BW_20260723_152732_323 同时检出三只bird</tspan>
+<tspan x="700.0" dy="27">(132.0°, +1.3202°)→T-0017    (131.6°, +1.4137°)→T-0018    (131.3°, +1.7878°)→T-0019</tspan>
+<tspan x="700.0" dy="27">三条记录不合并</tspan>
+</text>
+<rect x="70" y="360" width="1260" height="205" rx="10" class="box"/>
+<text x="83" y="385" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="83" dy="0">1002</tspan>
+</text>
+<text x="700.0" y="429.0" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700.0" dy="0">示例二：跨圈重访</tspan>
+<tspan x="700.0" dy="27">T-0001 方位约161.7°，panoY约2856~2857，βrel约-5.39°</tspan>
+<tspan x="700.0" dy="27">多次dt约8 s、da约0.00~0.01°、dy约0~1 px，沿用同一ID</tspan>
+<tspan x="700.0" dy="27">人工确认其为固定杆体：证明事件归并稳定，但不证明上游分类正确</tspan>
+</text>
+<rect x="70" y="620" width="1260" height="205" rx="10" class="box"/>
+<text x="83" y="645" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="83" dy="0">1003</tspan>
+</text>
+<text x="700.0" y="689.0" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700.0" dy="0">示例三：跨通道相位延迟</tspan>
+<tspan x="700.0" dy="27">T-0062：dt=3213 ms，da=1.47°，dy=134 px</tspan>
+<tspan x="700.0" dy="27">后续：dt=4208 ms，da=1.18°，dy=140 px，hits=3</tspan>
+<tspan x="700.0" dy="27">使用相位延迟关系而非普通近时窗口完成归并</tspan>
+</text>
+<text x="700" y="900" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">日志来源：2026-08-17/log_23-57-03.txt；高度角为26.88°理想模型计算值，非标定真值</tspan>
+</text>
+<text x="700.0" y="1006" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="700.0" dy="0">图10</tspan>
+</text>
+</svg>

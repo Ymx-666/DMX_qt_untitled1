@@ -25,6 +25,18 @@ static bool regionAllColor(const QImage &img, int x0, int w, QRgb c)
     return true;
 }
 
+static bool rowAllColor(const QImage &img, int y, QRgb color)
+{
+    if (img.isNull() || img.format() != QImage::Format_RGB32 || y < 0 || y >= img.height()) {
+        return false;
+    }
+    const QRgb *line = reinterpret_cast<const QRgb*>(img.constScanLine(y));
+    for (int x = 0; x < img.width(); ++x) {
+        if (line[x] != color) return false;
+    }
+    return true;
+}
+
 class PanoramaCacheTests : public QObject
 {
     Q_OBJECT
@@ -129,8 +141,51 @@ private slots:
         const PanoramaCache::BlockState st = cache.state(PanoramaCache::ThumbRgb);
         QVERIFY(st.validFrames <= st.segments);
     }
+
+    void targetCropWrapsAcrossPanoramaEdges()
+    {
+        PanoramaCache cache;
+        cache.configureFullSize(64, 8);
+        cache.configureThumbSize(64, 8);
+
+        const QRgb red = qRgb(255, 0, 0);
+        const QRgb green = qRgb(0, 255, 0);
+        const QRgb orange = qRgb(255, 128, 0);
+        const QVector<QRgb> colors = {
+            red, green, qRgb(0, 0, 255), qRgb(255, 255, 0),
+            qRgb(255, 0, 255), qRgb(0, 255, 255), qRgb(128, 128, 128), orange
+        };
+        for (QRgb color : colors) cache.pushRgbFrame(solidRgb(8, 8, color));
+
+        const QImage leftEdge = cache.extractFullRgbCrop(2, 4, 8);
+        QVERIFY(regionAllColor(leftEdge, 0, 2, orange));
+        QVERIFY(regionAllColor(leftEdge, 2, 6, red));
+
+        const QImage rightEdge = cache.extractFullRgbCrop(62, 4, 8);
+        QVERIFY(regionAllColor(rightEdge, 0, 6, orange));
+        QVERIFY(regionAllColor(rightEdge, 6, 2, red));
+
+        const QImage tileBoundary = cache.extractFullRgbCrop(8, 4, 8);
+        QVERIFY(regionAllColor(tileBoundary, 0, 4, red));
+        QVERIFY(regionAllColor(tileBoundary, 4, 4, green));
+    }
+
+    void targetCropPadsOnlyVertically()
+    {
+        PanoramaCache cache;
+        cache.configureFullSize(64, 8);
+        cache.configureThumbSize(64, 8);
+        const QRgb red = qRgb(255, 0, 0);
+        for (int i = 0; i < 8; ++i) cache.pushRgbFrame(solidRgb(8, 8, red));
+
+        const QImage crop = cache.extractFullRgbCrop(0, 1, 4);
+        QCOMPARE(crop.size(), QSize(4, 4));
+        QVERIFY(rowAllColor(crop, 0, qRgb(0, 0, 0)));
+        QVERIFY(rowAllColor(crop, 1, red));
+        QVERIFY(rowAllColor(crop, 2, red));
+        QVERIFY(rowAllColor(crop, 3, red));
+    }
 };
 
 QTEST_MAIN(PanoramaCacheTests)
 #include "panoramacache_tests.moc"
-
