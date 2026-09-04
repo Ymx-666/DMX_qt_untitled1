@@ -54,6 +54,12 @@ DMX 和 DMX_test 共用同一套 C++ 源码和 `dmx_config.json`：
 ## 5. 常用验证
 
 ```bash
+# 统一入口
+./scripts/test_fast.sh
+./scripts/test_build.sh
+./scripts/test_replay_smoke.sh
+
+# 也可单独执行原始入口
 # Python 测试
 python3 -m pytest -q tests
 
@@ -67,7 +73,7 @@ qmake manualnegativestore_tests.pro && make && ./manualnegativestore_tests
 ./build_test.sh
 ```
 
-实际基线验证结果以 `docs/testing/` 中对应报告为准，不在本文档中累加历史日志。
+统一入口、结果目录和 CI 边界详见 `docs/testing/README.md`。实际基线验证结果以 `docs/testing/` 中对应报告为准，不在本文档中累加历史日志。
 
 ## 6. 开发约束
 
