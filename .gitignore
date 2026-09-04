@@ -20,6 +20,7 @@ release/
 build_linux/
 build_msvc2013/
 /build_*/
+/test-results/
 
 # qmake generated artifacts
 ui_*.h
