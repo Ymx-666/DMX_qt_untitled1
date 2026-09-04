@@ -169,6 +169,16 @@ QImage PanoramaCache::snapshotThumbBw() const
     return snapshotInternalThumb(m_bw);
 }
 
+QImage PanoramaCache::snapshotFullRgb() const
+{
+    return snapshotInternalFull(m_rgb);
+}
+
+QImage PanoramaCache::snapshotFullBw() const
+{
+    return snapshotInternalFull(m_bw);
+}
+
 QImage PanoramaCache::extractFullRgbSliceByAngle(double angleDeg) const
 {
     return extractSliceInternal(m_rgb, angleDeg, false);
@@ -207,6 +217,16 @@ QImage PanoramaCache::extractThumbRgbWindow(double centerAngleDeg, int windowW) 
 QImage PanoramaCache::extractThumbBwWindow(double centerAngleDeg, int windowW) const
 {
     return extractWindowInternal(m_bw, false, centerAngleDeg, windowW);
+}
+
+QImage PanoramaCache::extractFullRgbCrop(int centerX, int centerY, int cropSize) const
+{
+    return extractFullCropInternal(m_rgb, centerX, centerY, cropSize);
+}
+
+QImage PanoramaCache::extractFullBwCrop(int centerX, int centerY, int cropSize) const
+{
+    return extractFullCropInternal(m_bw, centerX, centerY, cropSize);
 }
 
 bool PanoramaCache::copyFullRgbTile(int tileIndex, QImage &out) const
@@ -429,6 +449,20 @@ QImage PanoramaCache::snapshotInternalThumb(const PanoramaCache::Stream &s) cons
     return out;
 }
 
+QImage PanoramaCache::snapshotInternalFull(const PanoramaCache::Stream &s) const
+{
+    int coverW = 0;
+    {
+        QReadLocker l(&s.lock);
+        if (!s.inited || !s.fullReady || s.full.isNull() ||
+            s.segments <= 0 || s.sliceWFull <= 0) {
+            return QImage();
+        }
+        coverW = s.segments * s.sliceWFull;
+    }
+    return extractWindowInternal(s, true, 180.0, coverW);
+}
+
 QImage PanoramaCache::extractSliceInternal(const PanoramaCache::Stream &s, double angleDeg, bool allow180Fallback) const
 {
     int segments = 0;
@@ -635,6 +669,91 @@ QImage PanoramaCache::extractWindowInternal(const PanoramaCache::Stream &s, bool
         const int t = tiles[i];
         QReadWriteLock *lk = (t >= 0 && t < s.segLocks.size()) ? s.segLocks[t].data() : nullptr;
         if (lk) lk->unlock();
+    }
+    return out;
+}
+
+QImage PanoramaCache::extractFullCropInternal(const PanoramaCache::Stream &s,
+                                              int centerX,
+                                              int centerY,
+                                              int cropSize) const
+{
+    int segments = 0;
+    int sliceW = 0;
+    int coverW = 0;
+    int panoH = 0;
+    QImage::Format fmt = QImage::Format_Invalid;
+    {
+        QReadLocker l(&s.lock);
+        if (!s.inited || !s.fullReady || s.full.isNull() || s.sliceWFull <= 0 ||
+            s.segments <= 0 || s.segLocks.size() != s.segments) {
+            return QImage();
+        }
+        segments = s.segments;
+        sliceW = s.sliceWFull;
+        coverW = segments * sliceW;
+        panoH = s.full.height();
+        fmt = s.full.format();
+    }
+
+    if (cropSize <= 0 || coverW <= 0 || panoH <= 0 || cropSize > coverW) return QImage();
+
+    centerX %= coverW;
+    if (centerX < 0) centerX += coverW;
+    int startX = centerX - cropSize / 2;
+    startX %= coverW;
+    if (startX < 0) startX += coverW;
+
+    const int firstWidth = qMin(cropSize, coverW - startX);
+    const int wrappedWidth = cropSize - firstWidth;
+    const int startY = centerY - cropSize / 2;
+    const int sourceY1 = qMax(0, startY);
+    const int sourceY2 = qMin(panoH, startY + cropSize);
+
+    QImage out(cropSize, cropSize, fmt);
+    if (out.isNull()) return QImage();
+    if (fmt == QImage::Format_Indexed8) out.setColorTable(grayColorTableLocal());
+    out.fill(Qt::black);
+    if (sourceY2 <= sourceY1) return out;
+
+    QVector<int> tiles;
+    auto addTiles = [&](int x0, int width) {
+        if (width <= 0) return;
+        const int firstTile = x0 / sliceW;
+        const int lastTile = (x0 + width - 1) / sliceW;
+        for (int tile = firstTile; tile <= lastTile && tile < segments; ++tile) {
+            if (!tiles.contains(tile)) tiles.push_back(tile);
+        }
+    };
+    addTiles(startX, firstWidth);
+    addTiles(0, wrappedWidth);
+    std::sort(tiles.begin(), tiles.end());
+
+    const int bytesPerPixel = (fmt == QImage::Format_Indexed8) ? 1 : 4;
+    QReadLocker streamLock(&s.lock);
+    if (s.full.isNull() || s.full.width() < coverW || s.full.height() < panoH) return QImage();
+    for (int tile : tiles) {
+        QReadWriteLock *lock = s.segLocks.at(tile).data();
+        if (lock) lock->lockForRead();
+    }
+
+    const int destinationY = sourceY1 - startY;
+    for (int y = sourceY1; y < sourceY2; ++y) {
+        const uchar *sourceLine = s.full.constScanLine(y);
+        uchar *destinationLine = out.scanLine(destinationY + y - sourceY1);
+        memcpy(destinationLine,
+               sourceLine + (qint64)startX * bytesPerPixel,
+               (qint64)firstWidth * bytesPerPixel);
+        if (wrappedWidth > 0) {
+            memcpy(destinationLine + (qint64)firstWidth * bytesPerPixel,
+                   sourceLine,
+                   (qint64)wrappedWidth * bytesPerPixel);
+        }
+    }
+
+    for (int i = tiles.size() - 1; i >= 0; --i) {
+        QReadWriteLock *lock = s.segLocks.at(tiles.at(i)).data();
+        if (lock) lock->unlock();
     }
     return out;
 }
@@ -880,4 +999,3 @@ void PanoramaCache::writeSliceBw8(QImage &dst, const QImage &slice, int startX, 
         }
     }
 }
-

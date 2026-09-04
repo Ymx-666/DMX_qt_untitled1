@@ -129,7 +129,7 @@ bool TurntableDriver::sendCommand(unsigned char cmd1, unsigned char cmd2, unsign
     const qint64 written = m_serialPort->write(packet);
     if (written != packet.size()) return false;
     m_serialPort->flush();
-    return m_serialPort->waitForBytesWritten(100);
+    return true;
 }
 
 // ================= 运动控制与重置计时 =================

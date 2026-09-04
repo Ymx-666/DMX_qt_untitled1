@@ -19,6 +19,7 @@ debug/
 release/
 build_linux/
 build_msvc2013/
+/build_*/
 
 # qmake generated artifacts
 ui_*.h
@@ -53,3 +54,7 @@ udp_log.txt
 .idea/
 .trae/
 .aider*
+
+# Generated documentation and externally downloaded reference PDFs
+docs/**/*.pdf
+协议文档/*.pdf

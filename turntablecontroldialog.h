@@ -41,10 +41,12 @@ protected:
 
 private:
     void refreshSerialPorts(bool keepCurrent);
+    int nextCommandSequence();
 
     // ================= 核心驱动指针 =================
     // 注意：Dialog 只“使用”这个驱动，不负责“销毁”它。它的生命周期归 MainWindow 管
     TurntableDriver *m_driver;
+    int m_commandSequence = 0;
 
     // ================= 界面控件声明 =================
     // 1. 串口配置区

@@ -19,7 +19,7 @@ class RadarWidget : public QWidget
 public:
     explicit RadarWidget(QWidget *parent = nullptr);
 
-    void setCurrentAngle(int angle);
+    void setCurrentAngle(double angle);
     void setTargets(const QVector<RadarTarget>& targets);
 
 signals:
@@ -30,7 +30,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
 
 private:
-    int currentAngle;
+    double currentAngle;
     QVector<RadarTarget> m_targets;
 
     // [新增] 用于控制报警闪烁的定时器

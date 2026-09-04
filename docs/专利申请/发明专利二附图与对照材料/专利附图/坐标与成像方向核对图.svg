@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,4 L0,8 Z" fill="#000"/></marker></defs>
+<style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#000}.box{fill:#fff;stroke:#000;stroke-width:2}.thin{fill:none;stroke:#000;stroke-width:1.5}.line{fill:none;stroke:#000;stroke-width:2}.dash{fill:none;stroke:#000;stroke-width:2;stroke-dasharray:9 7}.arrow{fill:none;stroke:#000;stroke-width:2;marker-end:url(#arrow)}.small{font-size:18px}.normal{font-size:22px}.large{font-size:27px;font-weight:600}.mono{font-family:monospace;font-size:18px}</style>
+<rect x="1" y="1" width="1398" height="898" fill="#fff" stroke="none"/>
+<text x="700" y="45" text-anchor="middle" class="large" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">坐标与成像方向核对图（工程核对材料）</tspan>
+</text>
+<rect x="55" y="125" width="265" height="410" rx="10" class="box"/>
+<text x="68" y="150" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="68" dy="0">A</tspan>
+</text>
+<text x="187.5" y="301.525" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="187.5" dy="0">线阵输出帧</tspan>
+<tspan x="187.5" dy="22">x原：Sensor线方向</tspan>
+<tspan x="187.5" dy="22">对应垂直视场26.88°</tspan>
+<tspan x="187.5" dy="22">y原：累计扫描行/时间</tspan>
+</text>
+<line x1="90" y1="185" x2="280" y2="185" stroke="#000" stroke-width="2"/>
+<line x1="90" y1="185" x2="90" y2="485" stroke="#000" stroke-width="2"/>
+<line x1="90" y1="225" x2="245" y2="225" class="line"/>
+<polygon points="245,225 232.00,231.00 232.00,219.00" fill="#000"/>
+<text x="252" y="231" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="252" dy="0">+x原</tspan>
+</text>
+<line x1="125" y1="215" x2="125" y2="430" class="line"/>
+<polygon points="125,430 119.00,417.00 131.00,417.00" fill="#000"/>
+<text x="133" y="450" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="133" dy="0">+y原</tspan>
+</text>
+<rect x="390" y="165" width="230" height="120" rx="10" class="box"/>
+<text x="403" y="190" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="403" dy="0">B</tspan>
+</text>
+<text x="505.0" y="218.17499999999998" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="505.0" dy="0">逆时针旋转90°</tspan>
+<tspan x="505.0" dy="28">再水平镜像</tspan>
+</text>
+<line x1="320" y1="325" x2="390" y2="225" class="line"/>
+<polygon points="390,225 387.46,239.09 377.63,232.21" fill="#000"/>
+<rect x="690" y="100" width="650" height="470" rx="10" class="box"/>
+<text x="703" y="125" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="703" dy="0">C</tspan>
+</text>
+<text x="1015.0" y="342.35" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1015.0" dy="0"> </tspan>
+</text>
+<text x="1015" y="140" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1015" dy="0">环形全景坐标</tspan>
+<tspan x="1015" dy="24">panoX←累计扫描行/转台角</tspan>
+<tspan x="1015" dy="24">panoY←Sensor线坐标反向</tspan>
+</text>
+<line x1="735" y1="230" x2="1280" y2="230" stroke="#000" stroke-width="2"/>
+<line x1="735" y1="335" x2="1280" y2="335" stroke="#000" stroke-width="2" stroke-dasharray="9 7"/>
+<line x1="735" y1="500" x2="1280" y2="500" stroke="#000" stroke-width="2"/>
+<text x="750" y="217" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="750" dy="0">按当前安装约定：顶部为较高视线（β为正）</tspan>
+</text>
+<text x="750" y="322" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="750" dy="0">主点候选 cy=2047.5／光轴 βrel=0°</tspan>
+</text>
+<text x="750" y="528" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="750" dy="0">底部：较低视线（β为负）</tspan>
+</text>
+<line x1="620" y1="225" x2="690" y2="225" class="line"/>
+<polygon points="690,225 677.00,231.00 677.00,219.00" fill="#000"/>
+<text x="360" y="610" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="360" dy="0">理想针孔模型</tspan>
+<tspan x="360" dy="29">fy=Hp/[2tan(FOVv/2)]</tspan>
+<tspan x="360" dy="29">βrel=atan2(cy-vu,fy)</tspan>
+</text>
+<rect x="760" y="635" width="500" height="130" rx="10" class="dash"/>
+<text x="773" y="660" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="773" dy="0">D</tspan>
+</text>
+<text x="1010.0" y="682.0" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1010.0" dy="0">已知参数与待标定项</tspan>
+<tspan x="1010.0" dy="24">已确认FOVv=26.88°作用于panoY/Sensor Width</tspan>
+<tspan x="1010.0" dy="24">待确认有效ROI；标定cy、畸变、姿态、通道偏移</tspan>
+</text>
+<text x="700" y="820" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">说明：已知总视场角只能换算理想相对视线角，不能替代绝对姿态标定</tspan>
+</text>
+<text x="700.0" y="876" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="700.0" dy="0">工程核对图</tspan>
+</text>
+</svg>

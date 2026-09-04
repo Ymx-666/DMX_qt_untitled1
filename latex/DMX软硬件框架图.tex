@@ -1,0 +1,159 @@
+\documentclass[UTF8,landscape,a4paper,11pt]{ctexart}
+
+\usepackage[margin=12mm]{geometry}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,backgrounds,shapes.multipart,calc}
+
+\pagestyle{empty}
+
+\definecolor{navy}{HTML}{234A6F}
+\definecolor{navywash}{HTML}{EAF1F7}
+\definecolor{teal}{HTML}{2E6F64}
+\definecolor{tealwash}{HTML}{EAF4F1}
+\definecolor{gold}{HTML}{9A6A1F}
+\definecolor{goldwash}{HTML}{F8F1E5}
+\definecolor{brick}{HTML}{8A4444}
+\definecolor{brickwash}{HTML}{F7ECEC}
+\definecolor{ink}{HTML}{25313B}
+\definecolor{muted}{HTML}{687681}
+\definecolor{linegray}{HTML}{AAB4BC}
+\definecolor{panel}{HTML}{F7F9FA}
+
+\tikzset{
+  fieldmodule/.style={rectangle split,rectangle split parts=2,
+    rectangle split part fill={tealwash,white},rectangle split part align={center,center},
+    draw=teal,line width=0.9pt,rounded corners=1.5pt,align=center,
+    text width=38mm,minimum height=21mm,inner sep=2.4mm,font=\small},
+  gateway/.style={rectangle split,rectangle split parts=2,
+    rectangle split part fill={goldwash,white},rectangle split part align={center,center},
+    draw=gold,line width=0.9pt,rounded corners=1.5pt,align=center,
+    text width=50mm,minimum height=38mm,inner sep=2.6mm,font=\small},
+  process/.style={rectangle split,rectangle split parts=2,
+    rectangle split part fill={navywash,white},rectangle split part align={center,center},
+    draw=navy,line width=0.9pt,rounded corners=1.5pt,align=center,
+    text width=31mm,minimum height=27mm,inner sep=2.4mm,font=\small},
+  support/.style={rectangle split,rectangle split parts=2,
+    rectangle split part fill={panel,white},rectangle split part align={center,center},
+    draw=muted,line width=0.8pt,rounded corners=1.5pt,align=center,
+    text width=31mm,minimum height=19mm,inner sep=2.2mm,font=\small},
+  output/.style={rectangle split,rectangle split parts=2,
+    rectangle split part fill={brickwash,white},rectangle split part align={center,center},
+    draw=brick,line width=0.9pt,rounded corners=1.5pt,align=center,
+    text width=34mm,minimum height=20mm,inner sep=2.3mm,font=\small},
+  domainbox/.style={draw=linegray,line width=0.7pt,rounded corners=2pt,fill=panel,inner sep=6pt},
+  domainlabel/.style={font=\bfseries\small\sffamily,text=ink,fill=white,inner sep=1.5pt},
+  data/.style={-{Stealth[length=2.6mm,width=1.8mm]},line width=1.0pt,draw=navy},
+  control/.style={-{Stealth[length=2.6mm,width=1.8mm]},line width=1.0pt,draw=brick},
+  supportline/.style={-{Stealth[length=2.3mm,width=1.6mm]},line width=0.8pt,dashed,draw=muted},
+  edge/.style={font=\scriptsize\sffamily,text=muted,fill=white,inner sep=1.4pt,align=center}
+}
+
+\begin{document}
+
+\begin{center}
+  {\fontsize{20}{25}\selectfont\bfseries DMX低空小目标全景监测系统总体架构}\par
+\end{center}
+
+\vspace{4mm}
+\begin{center}
+\resizebox{0.99\textwidth}{!}{%
+\begin{tikzpicture}[node distance=12mm and 12mm]
+  \node[fieldmodule] (camera) {
+    \nodepart{one}\textbf{RGB/BW光学成像}
+    \nodepart{two}双通道4096$\times$4096\\图像写入设备共享目录};
+  \node[fieldmodule,below=18mm of camera] (turntable) {
+    \nodepart{one}\textbf{360度旋转转台}
+    \nodepart{two}角度回传与正交输出\\1.32/2/4/6/8秒档位};
+
+  \node[fieldmodule,right=14mm of camera] (device) {
+    \nodepart{one}\textbf{设备控制与共享单元}
+    \nodepart{two}\texttt{192.168.4.1}\\SMB共享\texttt{/data}};
+  \node[fieldmodule,right=14mm of turntable] (controller) {
+    \nodepart{one}\textbf{转台控制器}
+    \nodepart{two}串口9600 bit/s\\\texttt{/dev/ttyUSB0}};
+
+  \node[gateway,right=19mm of device,yshift=-18mm] (gateway) {
+    \nodepart{one}\textbf{通信接口与端口职责}
+    \nodepart{two}UDP 5001：发送设备控制命令\\
+    UDP 5002：接收设备应答\\
+    UDP 8001：接收图像路径文本\\
+    CIFS：从共享目录读取图像\\
+    Serial：转台控制与角度回传};
+
+  \node[process,right=18mm of gateway] (ingest) {
+    \nodepart{one}\textbf{01\quad 数据接入}
+    \nodepart{two}路径解析与文件就绪\\解码及角度时间回查};
+  \node[process,right=7mm of ingest] (panorama) {
+    \nodepart{one}\textbf{02\quad 几何与全景}
+    \nodepart{two}旋转、镜像与方位补偿\\RGB/BW全景及极坐标投影};
+  \node[process,right=7mm of panorama] (detect) {
+    \nodepart{one}\textbf{03\quad 目标检测}
+    \nodepart{two}天空Mask与传统候选\\RGB/BW直接YOLO};
+  \node[process,right=7mm of detect] (fusion) {
+    \nodepart{one}\textbf{04\quad 事件融合}
+    \nodepart{two}周期时空关联与类别投票\\静态杂波抑制};
+  \node[process,right=7mm of fusion] (ui) {
+    \nodepart{one}\textbf{05\quad 态势呈现}
+    \nodepart{two}目标列表、ROI与详情\\光学极坐标背景};
+
+  \node[support,below=18mm of ingest] (baseline) {
+    \nodepart{one}\textbf{基准回放}
+    \nodepart{two}20260723 RGB/BW\\固定8秒/圈};
+  \node[support,below=18mm of panorama] (storage) {
+    \nodepart{one}\textbf{数据持久化}
+    \nodepart{two}4T本地盘\\日志、录制、候选与全景};
+  \node[support,below=18mm of detect] (gpu) {
+    \nodepart{one}\textbf{计算资源}
+    \nodepart{two}RTX 5060 Ti\\16 GiB显存\\ONNX Runtime\\CUDA};
+  \node[support,below=18mm of fusion] (model) {
+    \nodepart{one}\textbf{模型与配置}
+    \nodepart{two}ONNX/PT、Mask\\阈值、类别与版本哈希};
+  \node[output,above=18mm of ui] (operator) {
+    \nodepart{one}\textbf{操作与复核}
+    \nodepart{two}设备控制、全景观察\\目标复核与状态监视};
+
+  \draw[data] (camera) -- node[edge,above]{图像} (device);
+  \draw[control] (turntable) -- node[edge,above]{角度/控制} (controller);
+  \draw[<->,line width=1.0pt,draw=navy] (device) -- node[edge]{UDP/CIFS} (gateway);
+  \draw[<->,line width=1.0pt,draw=brick] (controller) -- node[edge]{Serial} (gateway);
+
+  \draw[data] (gateway) -- node[edge,above]{帧/角度} (ingest);
+  \draw[data] (ingest) -- (panorama);
+  \draw[data] (panorama) -- (detect);
+  \draw[data] (detect) -- (fusion);
+  \draw[data] (fusion) -- (ui);
+  \draw[<->,line width=1.0pt,draw=ink] (ui) -- node[edge,right]{操作/显示} (operator);
+
+  \draw[supportline] (baseline) -- (ingest);
+  \draw[supportline] (storage) -- (panorama);
+  \draw[supportline] (gpu) -- (detect);
+  \draw[supportline] (model) -- (fusion);
+
+  \begin{scope}[on background layer]
+    \node[domainbox,fit=(camera)(turntable)(device)(controller)] (fielddomain) {};
+    \node[domainbox,fit=(ingest)(panorama)(detect)(fusion)(ui)(baseline)(storage)(gpu)(model)(operator)] (hostdomain) {};
+  \end{scope}
+  \node[domainlabel,anchor=south west]
+    at ([xshift=1.5mm,yshift=1.5mm]fielddomain.north west)
+    {A\quad 设备与运动平台\quad\textcolor{muted}{FIELD DEVICES}};
+  \node[domainlabel,anchor=south]
+    at ([yshift=6mm]gateway.north)
+    {B\quad 通信接口\quad\textcolor{muted}{COMMUNICATION}};
+  \node[domainlabel,anchor=south west]
+    at ([xshift=1.5mm,yshift=1.5mm]hostdomain.north west)
+    {C\quad 主控计算与算法链\quad\textcolor{muted}{HOST PROCESSING}};
+\end{tikzpicture}}
+\end{center}
+
+\vspace{4mm}
+\begin{center}
+  \small\sffamily
+  \textcolor{navy}{\rule{11mm}{1.1pt}}\ 图像与元数据\qquad
+  \textcolor{brick}{\rule{11mm}{1.1pt}}\ 设备与运动控制\qquad
+  \textcolor{muted}{\rule{11mm}{0.8pt}}\ 计算与数据支撑\qquad
+  \textbf{系统边界：}目标雷达是光学极坐标呈现，当前不输出真实距离。
+\end{center}
+
+\end{document}

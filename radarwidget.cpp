@@ -23,7 +23,7 @@ RadarWidget::RadarWidget(QWidget *parent) : QWidget(parent)
     blinkTimer->start(500); // 启动定时器
 }
 
-void RadarWidget::setCurrentAngle(int angle)
+void RadarWidget::setCurrentAngle(double angle)
 {
     currentAngle = angle;
     update();
@@ -63,7 +63,7 @@ void RadarWidget::paintEvent(QPaintEvent *event)
     painter.drawLine(center.x(), center.y() - radius, center.x(), center.y() + radius);
 
     // 2. 绘制扫描线
-    double rad = qDegreesToRadians((double)currentAngle);
+    double rad = qDegreesToRadians(currentAngle);
     int endX = center.x() + radius * qSin(rad);
     int endY = center.y() - radius * qCos(rad);
 
@@ -72,7 +72,7 @@ void RadarWidget::paintEvent(QPaintEvent *event)
     gradient.setColorAt(1.0, QColor(0, 255, 0, 0));
     painter.setBrush(gradient);
     painter.setPen(Qt::NoPen);
-    painter.drawPie(center.x() - radius, center.y() - radius, radius*2, radius*2, (90 - currentAngle) * 16, 60 * 16);
+    painter.drawPie(center.x() - radius, center.y() - radius, radius*2, radius*2, qRound((90.0 - currentAngle) * 16.0), 60 * 16);
 
     painter.setPen(QPen(Qt::white, 2));
     painter.drawLine(center, QPoint(endX, endY));
@@ -110,13 +110,13 @@ void RadarWidget::paintEvent(QPaintEvent *event)
     font.setPointSize(9);
     painter.setFont(font);
     struct Label { int ang; QString txt; };
-    QVector<Label> labels = { {0, "N"}, {90, "E"}, {180, "S"}, {270, "W"}};
+    QVector<Label> labels = { {0, "北"}, {90, "东"}, {180, "南"}, {270, "西"}};
     int textRadius = radius + 15;
     for(const auto &lbl : labels) {
         double r = qDegreesToRadians((double)lbl.ang);
         int tx = center.x() + textRadius * qSin(r);
         int ty = center.y() - textRadius * qCos(r);
-        int tw = painter.fontMetrics().width(lbl.txt);
+        int tw = painter.fontMetrics().horizontalAdvance(lbl.txt);
         int th = painter.fontMetrics().height();
         painter.drawText(tx - tw/2, ty + th/4, lbl.txt);
     }

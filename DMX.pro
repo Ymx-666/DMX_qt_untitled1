@@ -18,7 +18,7 @@ unix: {
     PKGCONFIG += opencv4
 }
 # 2. 定义宏以启用 Qt 5.4 的弃用警告，帮助排查版本兼容问题
-DEFINES += QT_DEPRECATED_WARNINGS
+DEFINES += QT_DEPRECATED_WARNINGS DMX_ADVANCED_DETECTION
 
 # 3. 项目源文件列表
 SOURCES += main.cpp \
@@ -33,7 +33,18 @@ SOURCES += main.cpp \
     panoramacache.cpp \
     panoramasaver.cpp \
     rawrecorder.cpp \
-    appconfig.cpp
+    appconfig.cpp \
+    directyolomanager.cpp \
+    radar_ui/compacttargetradarpanel.cpp \
+    radar_ui/manualnegativefeedback.cpp \
+    radar_ui/manualnegativestore.cpp \
+    radar_ui/imageviewerdialog.cpp \
+    radar_ui/polarpanoramaprojector.cpp \
+    radar_ui/targetinfopanel.cpp \
+    radar_ui/targetlistwidget.cpp \
+    radar_ui/targetpreviewpanel.cpp \
+    radar_ui/targetradarwidget.cpp \
+    radar_ui/targetradarwindow.cpp
 
 # 4. 项目头文件列表
 HEADERS += mainwindow.h \
@@ -47,7 +58,19 @@ HEADERS += mainwindow.h \
     panoramacache.h \
     panoramasaver.h \
     rawrecorder.h \
-    appconfig.h
+    appconfig.h \
+    directyolomanager.h \
+    radar_ui/compacttargetradarpanel.h \
+    radar_ui/manualnegativefeedback.h \
+    radar_ui/manualnegativestore.h \
+    radar_ui/imageviewerdialog.h \
+    radar_ui/polarpanoramaprojector.h \
+    radar_ui/targetinfopanel.h \
+    radar_ui/targetlistwidget.h \
+    radar_ui/targetpreviewpanel.h \
+    radar_ui/targetradarwidget.h \
+    radar_ui/targetradarwindow.h \
+    radar_ui/targetrecord.h
 
 # 5. UI 设计文件
 FORMS += mainwindow.ui

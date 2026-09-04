@@ -7,9 +7,11 @@
 #include <QMessageBox>
 #include <QSerialPortInfo>
 #include <QShowEvent>
-#include <QThread>
+#include <QTimer>
 #include <QVariant>
 #include <QVBoxLayout>
+
+#include <functional>
 
 static void setComboByData(QComboBox *combo, const QVariant &value)
 {
@@ -57,8 +59,8 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
 
     QGridLayout *layMove = new QGridLayout();
     cmbDirection = new QComboBox(this);
-    cmbDirection->addItem(zh("右转"), "right");
     cmbDirection->addItem(zh("左转"), "left");
+    cmbDirection->addItem(zh("右转"), "right");
 
     cmbSpeed = new QComboBox(this);
     cmbSpeed->addItem(zh("最快（约1.32秒/圈）"), 255);
@@ -66,7 +68,7 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
     cmbSpeed->addItem(zh("4秒/圈"), 85);
     cmbSpeed->addItem(zh("6秒/圈"), 57);
     cmbSpeed->addItem(zh("8秒/圈"), 43);
-    cmbSpeed->setCurrentIndex(2);
+    cmbSpeed->setCurrentIndex(3);
 
     btnLeft = new QPushButton(zh("左转"), this);
     btnRight = new QPushButton(zh("右转"), this);
@@ -187,6 +189,11 @@ void TurntableControlDialog::showEvent(QShowEvent *event)
     QDialog::showEvent(event);
 }
 
+int TurntableControlDialog::nextCommandSequence()
+{
+    return ++m_commandSequence;
+}
+
 void TurntableControlDialog::refreshSerialPorts(bool keepCurrent)
 {
     const QString current = keepCurrent ? cmbPorts->currentText().trimmed() : QString();
@@ -236,37 +243,48 @@ bool TurntableControlDialog::runWithCurrentSettings(QString *errMsg)
             return false;
         }
         btnOpenSerial->setText(zh("关闭串口"));
-        QCoreApplication::processEvents();
-        QThread::msleep(120);
     }
 
-    m_driver->disableOrtho();
+    const int seq = nextCommandSequence();
     chkOrthoEnabled->setChecked(false);
-    QThread::msleep(40);
 
-    if (s.direction == QStringLiteral("left")) m_driver->turnLeft(s.speed);
-    else m_driver->turnRight(s.speed);
-    QThread::msleep(80);
+    auto schedule = [this, seq](int delayMs, const std::function<void()> &fn) {
+        QTimer::singleShot(delayMs, this, [this, seq, fn]() {
+            if (seq != m_commandSequence || !m_driver || !m_driver->isOpen()) return;
+            fn();
+        });
+    };
 
-    m_driver->setOrthoLength(s.orthoLength);
-    QThread::msleep(40);
-    if (s.feedbackEnabled) m_driver->enableFeedback();
-    else m_driver->disableFeedback();
-    QThread::msleep(40);
-    m_driver->enableOrtho();
-    chkOrthoEnabled->setChecked(true);
+    schedule(0, [this]() { m_driver->disableOrtho(); });
+    schedule(40, [this, s]() {
+        if (s.direction == QStringLiteral("left")) m_driver->turnLeft(s.speed);
+        else m_driver->turnRight(s.speed);
+    });
+    schedule(120, [this, s]() { m_driver->setOrthoLength(s.orthoLength); });
+    schedule(160, [this, s]() {
+        if (s.feedbackEnabled) m_driver->enableFeedback();
+        else m_driver->disableFeedback();
+    });
+    schedule(200, [this]() {
+        m_driver->enableOrtho();
+        chkOrthoEnabled->setChecked(true);
+    });
     return true;
 }
 
 void TurntableControlDialog::stopAndDisableOrtho()
 {
     if (!m_driver) return;
+    nextCommandSequence();
     if (!m_driver->isOpen()) {
         chkOrthoEnabled->setChecked(false);
         return;
     }
     m_driver->stop();
-    QThread::msleep(40);
-    m_driver->disableOrtho();
     chkOrthoEnabled->setChecked(false);
+    const int seq = m_commandSequence;
+    QTimer::singleShot(40, this, [this, seq]() {
+        if (seq != m_commandSequence || !m_driver || !m_driver->isOpen()) return;
+        m_driver->disableOrtho();
+    });
 }

@@ -4,11 +4,13 @@
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 #include <QDebug>
-#include <QPainter>
 #include <QtMath>
 #include <QTimer>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QSaveFile>
+#include <QImageWriter>
 #include <QDateTime>
 #include <QThread>
 #include <QMutexLocker>
@@ -38,6 +40,11 @@
 #include "rawrecorder.h"
 #include "asciipath.h"
 #include "appconfig.h"
+#include "radar_ui/compacttargetradarpanel.h"
+#include "radar_ui/targetradarwindow.h"
+#ifdef DMX_ADVANCED_DETECTION
+#include "directyolomanager.h"
+#endif
 
 static inline QString u8s(const char *s) { return QString::fromUtf8(s); }
 
@@ -56,12 +63,42 @@ static QString resolveLogRoot()
     return AppConfig::instance().logRoot;
 }
 
+static bool parseReplayFileIndex(const QString &path, quint64 *out)
+{
+    const QString base = QFileInfo(path).completeBaseName();
+    int pos = base.size() - 1;
+    while (pos >= 0 && base.at(pos).isDigit()) --pos;
+    const QString digits = base.mid(pos + 1);
+    if (digits.isEmpty()) return false;
+    bool ok = false;
+    const quint64 value = digits.toULongLong(&ok);
+    if (!ok) return false;
+    if (out) *out = value;
+    return true;
+}
+
+static double normalizeReplayAngle(double angleDeg)
+{
+    while (angleDeg < 0.0) angleDeg += 360.0;
+    while (angleDeg >= 360.0) angleDeg -= 360.0;
+    return angleDeg;
+}
+
+static double replayFrameAngle(quint64 fileIndex)
+{
+    const int segments = 16;
+    const int sourceSlot = (int)(fileIndex % (quint64)segments);
+    const int leftTurnTile = (segments - sourceSlot) % segments;
+    return (double)leftTurnTile * (360.0 / (double)segments);
+}
+
 
 class RoiPopupDialog : public QDialog
 {
 public:
-    explicit RoiPopupDialog(QWidget *parent = nullptr)
-        : QDialog(parent)
+    explicit RoiPopupDialog(QWidget *parent = nullptr, bool centerViewportZoom = false)
+        : QDialog(parent),
+          m_centerViewportZoom(centerViewportZoom)
     {
         setWindowTitle("ROI");
         setSizeGripEnabled(true);
@@ -69,8 +106,14 @@ public:
         m_label = new QLabel();
         m_label->setBackgroundRole(QPalette::Base);
         m_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+#ifdef DMX_TEST_BUILD
+        m_label->setScaledContents(true);
+#else
         m_label->setScaledContents(false);
+#endif
         m_label->setAlignment(Qt::AlignCenter);
+        m_label->setCursor(Qt::OpenHandCursor);
+        m_label->installEventFilter(this);
 
         m_scroll = new QScrollArea(this);
         m_scroll->setWidget(m_label);
@@ -78,6 +121,7 @@ public:
         // scroll a zoomed image (magnifier), instead of stretching to fit.
         m_scroll->setWidgetResizable(false);
         m_scroll->setAlignment(Qt::AlignCenter);
+        m_scroll->viewport()->installEventFilter(this);
 
         QVBoxLayout *layout = new QVBoxLayout(this);
         layout->setContentsMargins(0, 0, 0, 0);
@@ -88,18 +132,21 @@ public:
     void setImage(const QImage &img)
     {
         if (img.isNull() || !m_label) return;
-        m_label->setPixmap(QPixmap::fromImage(img));
-        m_label->resize(img.size());
+        m_sourceImage = img.convertToFormat(QImage::Format_RGB32);
+        updateDisplayedImage();
 
-        // Mouse-centered zoom: after the re-scaled image arrives, scroll so the
-        // pixel that was under the cursor stays under the cursor.
+        // Restore the selected image point after the asynchronously scaled
+        // image arrives.
         if (m_anchorFx >= 0.0 && m_scroll) {
-            const int newX = (int)(m_anchorFx * img.width()) - m_anchorViewportPos.x();
-            const int newY = (int)(m_anchorFy * img.height()) - m_anchorViewportPos.y();
-            if (m_scroll->horizontalScrollBar()) m_scroll->horizontalScrollBar()->setValue(newX);
-            if (m_scroll->verticalScrollBar()) m_scroll->verticalScrollBar()->setValue(newY);
+            const double fx = m_anchorFx;
+            const double fy = m_anchorFy;
+            const QPoint viewportPos = m_anchorViewportPos;
             m_anchorFx = -1.0;
             m_anchorFy = -1.0;
+            restoreZoomAnchor(fx, fy, viewportPos);
+            QTimer::singleShot(0, this, [this, fx, fy, viewportPos]() {
+                restoreZoomAnchor(fx, fy, viewportPos);
+            });
         }
     }
 
@@ -109,18 +156,37 @@ protected:
         if (!event) return;
         if (event->isAutoRepeat()) return;
         const int k = event->key();
+        if ((event->modifiers() & Qt::ControlModifier) && k == Qt::Key_Z) {
+            m_histStretch = !m_histStretch;
+            updateDisplayedImage();
+            return;
+        }
+        if (k == Qt::Key_F11 || k == Qt::Key_F) {
+            toggleFullscreen();
+            return;
+        }
+        if (k == Qt::Key_Escape && isFullScreen()) {
+            showNormal();
+            return;
+        }
         if (k == Qt::Key_Plus || k == Qt::Key_Equal) {
+            captureViewportCenterAnchor();
             m_scale *= 1.25;
+#ifdef DMX_TEST_BUILD
+            m_scale = qMin(5.0, m_scale);
+#endif
             if (m_onScale) m_onScale(m_scale);
             return;
         }
         if (k == Qt::Key_Minus || k == Qt::Key_Underscore) {
+            captureViewportCenterAnchor();
             m_scale /= 1.25;
             if (m_scale < 0.05) m_scale = 0.05;
             if (m_onScale) m_onScale(m_scale);
             return;
         }
         if (k == Qt::Key_0) {
+            captureViewportCenterAnchor();
             m_scale = 1.0;
             if (m_onScale) m_onScale(m_scale);
             return;
@@ -130,40 +196,209 @@ protected:
 
     void wheelEvent(QWheelEvent *event) override
     {
-        if (!event || !m_scroll || !m_label) { QDialog::wheelEvent(event); return; }
-        const int dy = event->angleDelta().y();
-        if (dy == 0) { QDialog::wheelEvent(event); return; }
+        if (handleWheelZoom(event)) return;
+        QDialog::wheelEvent(event);
+    }
 
-        // Record the image-space fraction under the cursor before zooming, so we
-        // can scroll back to it once the re-scaled image arrives (see setImage).
-        const QPoint vpPos = m_scroll->viewport()->mapFromGlobal(event->globalPos());
-        const int hVal = m_scroll->horizontalScrollBar() ? m_scroll->horizontalScrollBar()->value() : 0;
-        const int vVal = m_scroll->verticalScrollBar() ? m_scroll->verticalScrollBar()->value() : 0;
-        const int lw = m_label->width();
-        const int lh = m_label->height();
-        if (lw > 0 && lh > 0) {
-            m_anchorFx = (double)(hVal + vpPos.x()) / (double)lw;
-            m_anchorFy = (double)(vVal + vpPos.y()) / (double)lh;
-            m_anchorViewportPos = vpPos;
+    bool eventFilter(QObject *obj, QEvent *event) override
+    {
+        if (!event || !m_scroll) return QDialog::eventFilter(obj, event);
+
+        if (m_centerViewportZoom && event->type() == QEvent::Wheel) {
+            QWheelEvent *wheel = static_cast<QWheelEvent*>(event);
+            if (handleWheelZoom(wheel)) return true;
         }
 
-        m_scale *= (dy > 0) ? 1.25 : (1.0 / 1.25);
-        if (m_scale < 0.05) m_scale = 0.05;
-        if (m_onScale) m_onScale(m_scale);
-        event->accept();
+        if (event->type() == QEvent::MouseButtonDblClick) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                toggleFullscreen();
+                event->accept();
+                return true;
+            }
+        }
+
+        if (event->type() == QEvent::MouseButtonPress) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton) {
+                m_dragging = true;
+                m_lastDragPos = me->globalPos();
+                if (m_label) m_label->setCursor(Qt::ClosedHandCursor);
+                event->accept();
+                return true;
+            }
+        }
+
+        if (event->type() == QEvent::MouseMove && m_dragging) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            const QPoint delta = me->globalPos() - m_lastDragPos;
+            m_lastDragPos = me->globalPos();
+            if (m_scroll->horizontalScrollBar()) {
+                m_scroll->horizontalScrollBar()->setValue(m_scroll->horizontalScrollBar()->value() - delta.x());
+            }
+            if (m_scroll->verticalScrollBar()) {
+                m_scroll->verticalScrollBar()->setValue(m_scroll->verticalScrollBar()->value() - delta.y());
+            }
+            event->accept();
+            return true;
+        }
+
+        if (event->type() == QEvent::MouseButtonRelease) {
+            QMouseEvent *me = static_cast<QMouseEvent*>(event);
+            if (me->button() == Qt::LeftButton && m_dragging) {
+                m_dragging = false;
+                if (m_label) m_label->setCursor(Qt::OpenHandCursor);
+                event->accept();
+                return true;
+            }
+        }
+
+        return QDialog::eventFilter(obj, event);
     }
 
 private:
     friend class MainWindow;
     void setScaleCallback(std::function<void(double)> cb) { m_onScale = std::move(cb); }
 
+    bool handleWheelZoom(QWheelEvent *event)
+    {
+        if (!event || !m_scroll || !m_label) return false;
+        if (m_centerViewportZoom && !(event->modifiers() & Qt::ControlModifier)) return false;
+        const int dy = event->angleDelta().y();
+        if (dy == 0) return false;
+
+        if (m_centerViewportZoom) {
+            captureViewportCenterAnchor();
+        } else {
+            const QPoint vpPos = m_scroll->viewport()->mapFromGlobal(event->globalPos());
+            captureZoomAnchor(vpPos);
+        }
+
+        m_scale *= (dy > 0) ? 1.25 : (1.0 / 1.25);
+        if (m_scale < 0.05) m_scale = 0.05;
+#ifdef DMX_TEST_BUILD
+        m_scale = qMin(5.0, m_scale);
+#endif
+        if (m_onScale) m_onScale(m_scale);
+        event->accept();
+        return true;
+    }
+
+    void captureViewportCenterAnchor()
+    {
+        if (!m_centerViewportZoom || !m_scroll) return;
+        captureZoomAnchor(m_scroll->viewport()->rect().center());
+    }
+
+    void captureZoomAnchor(const QPoint &viewportPos)
+    {
+        if (!m_scroll || !m_label || m_label->width() <= 0 || m_label->height() <= 0) return;
+        const QPoint labelPos = m_label->mapFrom(m_scroll->viewport(), viewportPos);
+        m_anchorFx = qBound(0.0, (double)labelPos.x() / (double)m_label->width(), 1.0);
+        m_anchorFy = qBound(0.0, (double)labelPos.y() / (double)m_label->height(), 1.0);
+        m_anchorViewportPos = viewportPos;
+    }
+
+    void restoreZoomAnchor(double fx, double fy, const QPoint &viewportPos)
+    {
+        if (!m_scroll || !m_label || m_label->width() <= 0 || m_label->height() <= 0) return;
+        const QPoint labelAnchor(qRound(fx * m_label->width()), qRound(fy * m_label->height()));
+        const QPoint currentViewportPos = m_label->mapTo(m_scroll->viewport(), labelAnchor);
+        const QPoint delta = currentViewportPos - viewportPos;
+        if (m_scroll->horizontalScrollBar()) {
+            QScrollBar *bar = m_scroll->horizontalScrollBar();
+            bar->setValue(bar->value() + delta.x());
+        }
+        if (m_scroll->verticalScrollBar()) {
+            QScrollBar *bar = m_scroll->verticalScrollBar();
+            bar->setValue(bar->value() + delta.y());
+        }
+    }
+
+    void toggleFullscreen()
+    {
+        if (isFullScreen()) showNormal();
+        else showFullScreen();
+    }
+
+    void updateDisplayedImage()
+    {
+        if (!m_label || m_sourceImage.isNull()) return;
+        const QImage img = m_histStretch ? histogramStretch(m_sourceImage) : m_sourceImage;
+        m_label->setPixmap(QPixmap::fromImage(img));
+#ifdef DMX_TEST_BUILD
+        const double displayScale = qBound(0.05, m_scale, 5.0);
+        m_label->resize(qMax(1, qRound(img.width() * displayScale)),
+                        qMax(1, qRound(img.height() * displayScale)));
+#else
+        m_label->resize(img.size());
+#endif
+    }
+
+    static QImage histogramStretch(const QImage &src)
+    {
+        if (src.isNull()) return src;
+
+        QImage rgb = src.convertToFormat(QImage::Format_RGB32);
+        int hist[256] = {0};
+        const int w = rgb.width();
+        const int h = rgb.height();
+        const int total = w * h;
+        if (total <= 0) return rgb;
+
+        for (int y = 0; y < h; ++y) {
+            const QRgb *line = reinterpret_cast<const QRgb*>(rgb.constScanLine(y));
+            for (int x = 0; x < w; ++x) {
+                ++hist[qGray(line[x])];
+            }
+        }
+
+        const int lowTarget = qMax(0, total / 100);
+        const int highTarget = qMax(0, total - total / 100);
+        int low = 0;
+        int acc = 0;
+        for (; low < 255; ++low) {
+            acc += hist[low];
+            if (acc >= lowTarget) break;
+        }
+        int high = 255;
+        acc = 0;
+        for (; high > 0; --high) {
+            acc += hist[high];
+            if (acc >= (total - highTarget)) break;
+        }
+
+        if (high <= low + 1) return rgb;
+
+        int lut[256];
+        for (int i = 0; i < 256; ++i) {
+            if (i <= low) lut[i] = 0;
+            else if (i >= high) lut[i] = 255;
+            else lut[i] = qBound(0, (i - low) * 255 / (high - low), 255);
+        }
+
+        for (int y = 0; y < h; ++y) {
+            QRgb *line = reinterpret_cast<QRgb*>(rgb.scanLine(y));
+            for (int x = 0; x < w; ++x) {
+                const QRgb p = line[x];
+                line[x] = qRgb(lut[qRed(p)], lut[qGreen(p)], lut[qBlue(p)]);
+            }
+        }
+        return rgb;
+    }
+
     QScrollArea *m_scroll = nullptr;
     QLabel *m_label = nullptr;
+    QImage m_sourceImage;
     double m_scale = 1.0;
     std::function<void(double)> m_onScale;
     double m_anchorFx = -1.0;
     double m_anchorFy = -1.0;
     QPoint m_anchorViewportPos;
+    bool m_dragging = false;
+    QPoint m_lastDragPos;
+    bool m_histStretch = false;
+    bool m_centerViewportZoom = false;
 };
 
 RoiWorker::RoiWorker(QSharedPointer<PanoramaCache> cache, QObject *parent)
@@ -253,6 +488,9 @@ void RoiWorker::process()
         QImage rgb = m_cache->extractFullRgbWindow(fullRgbAngle, 0);
         if (rgb.isNull()) rgb = m_cache->extractThumbRgbWindow(fullRgbAngle, 0);
         if (!rgb.isNull()) {
+#ifdef DMX_TEST_BUILD
+            fullRgbScale = qBound(0.05, fullRgbScale, 5.0);
+#else
             const qint64 maxPixels = 40ll * 1024 * 1024;
             const int maxDim = 16384;
             const double srcPixels = (double)rgb.width() * (double)rgb.height();
@@ -268,6 +506,7 @@ void RoiWorker::process()
                 rgb = rgb.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
             }
             fullRgbScale = s;
+#endif
         }
         emit fullScaledReady(false, fullRgbAngle, fullRgbScale, rgb);
     }
@@ -276,6 +515,9 @@ void RoiWorker::process()
         QImage bw = m_cache->extractFullBwWindow(fullBwAngle, 0);
         if (bw.isNull()) bw = m_cache->extractThumbBwWindow(fullBwAngle, 0);
         if (!bw.isNull() && bw.format() == QImage::Format_Indexed8) bw = bw.convertToFormat(QImage::Format_RGB32);
+#ifdef DMX_TEST_BUILD
+        if (!bw.isNull()) fullBwScale = qBound(0.05, fullBwScale, 5.0);
+#else
         if (!bw.isNull() && fullBwScale != 1.0) {
             const qint64 maxPixels = 40ll * 1024 * 1024;
             const int maxDim = 16384;
@@ -291,6 +533,7 @@ void RoiWorker::process()
             bw = bw.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
             fullBwScale = s;
         }
+#endif
         emit fullScaledReady(true, fullBwAngle, fullBwScale, bw);
     }
 
@@ -314,6 +557,10 @@ MainWindow::MainWindow(QWidget *parent) :
     m_lastDetectMs = 0;
     m_lastLogMs = 0;
     const AppConfig &cfg = AppConfig::instance();
+    m_replayMode = cfg.replayMode;
+    if (m_replayMode) {
+        setWindowTitle(QStringLiteral("DMX Test - 20260723 - 8s/rev"));
+    }
     m_captureLatencyMs = cfg.captureLatencyMs;
     m_captureLatencyRgbMs = cfg.captureLatencyRgbMs;
     m_captureLatencyBwMs = cfg.captureLatencyBwMs;
@@ -400,8 +647,18 @@ MainWindow::MainWindow(QWidget *parent) :
                .arg(m_captureLatencyRgbMs)
                .arg(m_captureLatencyBwMs),
            QStringLiteral("#9C27B0"));
-    QWidget *central = new QWidget(this);
-    setCentralWidget(central);
+    if (m_replayMode) {
+        addLog(QStringLiteral("REPLAY"),
+               QStringLiteral("test mode ready: click Device Run, fixed 8s/rev, pathPort=%1, skyShrink=%2px")
+                   .arg(cfg.pathPort)
+                   .arg(cfg.detectSkyShrinkPixels),
+               QStringLiteral("#FFD54F"));
+    }
+    m_pageStack = new QStackedWidget(this);
+    setCentralWidget(m_pageStack);
+    QWidget *central = new QWidget(m_pageStack);
+    m_legacyPage = central;
+    m_pageStack->addWidget(central);
     QGridLayout *layout = new QGridLayout(central);
     layout->setContentsMargins(10, 10, 10, 10);
 
@@ -409,7 +666,7 @@ MainWindow::MainWindow(QWidget *parent) :
     thermalPanoramaView = new PanoramaWidget(this);
     colorRoiView = new AIVideoWidget(this);
     thermalRoiView = new AIVideoWidget(this);
-    captureView = new AIVideoWidget(this);
+    m_compactTargetRadar = new CompactTargetRadarPanel(this);
     radarView = new RadarWidget(this);
     radarFeedbackView = new AIVideoWidget(this);
 
@@ -445,14 +702,30 @@ MainWindow::MainWindow(QWidget *parent) :
     layout->addWidget(thermalRoiView, 1, 1, 1, 1);
 
     QHBoxLayout *bottomLayout = new QHBoxLayout();
-    bottomLayout->addWidget(captureView);
-    bottomLayout->addWidget(radarView);
-    bottomLayout->addWidget(radarFeedbackView);
+    bottomLayout->setSpacing(8);
+#ifdef DMX_TEST_BUILD
+    // The test layout replaces both legacy bottom widgets with the compact
+    // target panel. Keep them alive for the existing update paths, but prevent
+    // un-managed children from appearing over the top-left of the main window.
+    radarView->hide();
+    radarFeedbackView->hide();
+    bottomLayout->addWidget(m_compactTargetRadar, 1);
+#else
+    bottomLayout->addWidget(m_compactTargetRadar, 11);
+    bottomLayout->addWidget(radarView, 10);
+    bottomLayout->addWidget(radarFeedbackView, 10);
+#endif
     layout->addLayout(bottomLayout, 2, 0, 1, 2);
 
     layout->setRowStretch(0, 0);
     layout->setRowStretch(1, 4);
     layout->setRowStretch(2, 2);
+
+    m_targetRadarWindow = new TargetRadarWindow(QString(), m_pageStack);
+    connect(m_targetRadarWindow, &TargetRadarWindow::visibleTargetsChanged,
+            m_compactTargetRadar, &CompactTargetRadarPanel::setTargets);
+    m_targetRadarWindow->clearTargets();
+    m_pageStack->addWidget(m_targetRadarWindow);
 
     connect(colorRoiView, &AIVideoWidget::clickedAt, this, [=](QPoint) {
         addLog(QStringLiteral("ROI"), QStringLiteral("RGB ROI click (hasImg=%1 size=%2x%3)")
@@ -466,7 +739,7 @@ MainWindow::MainWindow(QWidget *parent) :
             return;
         }
         const double angle = m_lastRoiAngle;
-        RoiPopupDialog *dlg = new RoiPopupDialog(this);
+        RoiPopupDialog *dlg = new RoiPopupDialog(this, m_replayMode);
         dlg->setAttribute(Qt::WA_DeleteOnClose, true);
         dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
         dlg->setWindowTitle(QStringLiteral("RGB ROI  (+/- zoom, 0 reset)"));
@@ -503,7 +776,7 @@ MainWindow::MainWindow(QWidget *parent) :
             return;
         }
         const double angle = m_lastRoiAngle;
-        RoiPopupDialog *dlg = new RoiPopupDialog(this);
+        RoiPopupDialog *dlg = new RoiPopupDialog(this, m_replayMode);
         dlg->setAttribute(Qt::WA_DeleteOnClose, true);
         dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
         dlg->setWindowTitle(QStringLiteral("BW ROI  (+/- zoom, 0 reset)"));
@@ -544,6 +817,12 @@ MainWindow::MainWindow(QWidget *parent) :
 
     m_latestAngle = 0.0;
     m_prevCheckAngle = 0.0;
+    if (m_replayMode) {
+        m_replaySweepTimer = new QTimer(this);
+        m_replaySweepTimer->setTimerType(Qt::PreciseTimer);
+        m_replaySweepTimer->setInterval(30);
+        connect(m_replaySweepTimer, &QTimer::timeout, this, &MainWindow::advanceReplaySweep);
+    }
 
     m_driver = new TurntableDriver(this);
     m_ctrlDialog = new TurntableControlDialog(m_driver, this);
@@ -585,7 +864,13 @@ MainWindow::MainWindow(QWidget *parent) :
         const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
         m_latestAngle = displayAngle;
         m_angleHistory.add(nowMs, displayAngle);
+        if (m_prevRadarSweepAngle >= 0.0) {
+            pruneDetectedRadarTargets(nowMs, true);
+        }
+        m_prevRadarSweepAngle = displayAngle;
         radarView->setCurrentAngle(displayAngle);
+        if (m_compactTargetRadar) m_compactTargetRadar->setScanAngle(displayAngle);
+        if (m_targetRadarWindow) m_targetRadarWindow->setScanAngle(displayAngle);
         m_angleLabel->setText(QString("%1°").arg(displayAngle, 0, 'f', 2));
         if (m_colorThread) m_colorThread->setCurrentAngle(displayAngle);
         if (m_thermalThread) m_thermalThread->setCurrentAngle(displayAngle);
@@ -651,6 +936,33 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(m_colorThread, &VideoThread::logRequested, this, &MainWindow::addLog);
     connect(m_thermalThread, &VideoThread::logRequested, this, &MainWindow::addLog);
     connect(m_pathThread, &VideoThread::logRequested, this, &MainWindow::addLog);
+    connect(m_colorThread, &VideoThread::candidateDetected, this, &MainWindow::onCandidateDetected, Qt::QueuedConnection);
+    connect(m_thermalThread, &VideoThread::candidateDetected, this, &MainWindow::onCandidateDetected, Qt::QueuedConnection);
+
+#ifdef DMX_ADVANCED_DETECTION
+    m_directYoloManager = new DirectYoloManager(this);
+    connect(m_directYoloManager, &DirectYoloManager::logRequested, this, &MainWindow::addLog);
+    connect(m_directYoloManager,
+            &DirectYoloManager::candidateDetected,
+            this,
+            &MainWindow::onCandidateDetected,
+            Qt::QueuedConnection);
+    connect(m_directYoloManager,
+            &DirectYoloManager::staticClutterDetected,
+            this,
+            &MainWindow::onStaticClutterDetected,
+            Qt::QueuedConnection);
+    connect(m_colorThread,
+            &VideoThread::directYoloFrameReady,
+            m_directYoloManager,
+            &DirectYoloManager::submitFrame,
+            Qt::QueuedConnection);
+    connect(m_thermalThread,
+            &VideoThread::directYoloFrameReady,
+            m_directYoloManager,
+            &DirectYoloManager::submitFrame,
+            Qt::QueuedConnection);
+#endif
 
     connect(m_pathThread, &VideoThread::pathReceived, this, &MainWindow::onPathReceived, Qt::QueuedConnection);
 
@@ -666,6 +978,9 @@ MainWindow::MainWindow(QWidget *parent) :
     connect(radarView, SIGNAL(sectorClicked(int)), this, SLOT(onRadarClicked(int)));
 
     initSimulatedTargets();
+    if (m_replayMode && qEnvironmentVariableIntValue("DMX_REPLAY_AUTOSTART") == 1) {
+        QTimer::singleShot(0, this, &MainWindow::onActionOpenDevice);
+    }
 }
 
 void MainWindow::mousePressEvent(QMouseEvent *event)
@@ -797,8 +1112,11 @@ void MainWindow::createToolBar()
     addToolBar(Qt::TopToolBarArea, m_mainToolBar);
     m_mainToolBar->setMovable(false);
 
-    m_mainToolBar->setFixedHeight(40);
+    m_mainToolBar->setMinimumHeight(50);
     m_mainToolBar->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    m_mainToolBar->setStyleSheet(
+        "QToolBar { spacing: 6px; padding: 4px 6px; }"
+        "QToolButton { min-height: 34px; padding: 4px 8px; }");
 
     m_actOpenDevice = new QAction(u8s("\xE8\xAE\xBE\xE5\xA4\x87\xE8\xBF\x90\xE8\xA1\x8C"), this);
     m_actCloseDevice = new QAction(u8s("\xE8\xAE\xBE\xE5\xA4\x87\xE5\x81\x9C\xE6\xAD\xA2"), this);
@@ -810,6 +1128,8 @@ void MainWindow::createToolBar()
     m_actSaveFullPanorama = new QAction(u8s("\xE4\xBF\x9D\xE5\xAD\x98\xE5\x85\xA8\xE5\x9B\xBE"), this);
     m_actRecord = new QAction(u8s("\xE5\xBC\x80\xE5\xA7\x8B\xE5\xBD\x95\xE5\x88\xB6"), this);
     m_actRecord->setCheckable(true);
+    m_actTargetRadar = new QAction(u8s("\xE7\x9B\xAE\xE6\xA0\x87\xE9\x9B\xB7\xE8\xBE\xBE"), this);
+    m_actTargetRadar->setCheckable(true);
     m_actExit = new QAction(u8s("\xE9\x80\x80\xE5\x87\xBA\xE7\xB3\xBB\xE7\xBB\x9F"), this);
 
     m_mainToolBar->addAction(m_actOpenDevice);
@@ -825,6 +1145,7 @@ void MainWindow::createToolBar()
 
     QAction *actOpenTurntable = m_mainToolBar->addAction(u8s("\xE8\xBD\xAC\xE5\x8F\xB0\xE6\x8E\xA7\xE5\x88\xB6"));
     m_mainToolBar->addAction(m_actSaveFullPanorama);
+    m_mainToolBar->addAction(m_actTargetRadar);
 
     QWidget *spacer = new QWidget(this);
     spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
@@ -840,10 +1161,46 @@ void MainWindow::createToolBar()
     connect(m_actClearImage, &QAction::triggered, this, &MainWindow::onClearUiClicked);
     connect(m_actSaveFullPanorama, &QAction::triggered, this, &MainWindow::onSaveFullPanoramaClicked);
     connect(m_actRecord, &QAction::triggered, this, &MainWindow::onToggleRecording);
+    connect(m_actTargetRadar, &QAction::triggered, this, &MainWindow::onOpenTargetRadarWindow);
     connect(actOpenTurntable, &QAction::triggered, this, [=](){ m_ctrlDialog->show(); });
     connect(m_actExit, &QAction::triggered, this, &MainWindow::close);
 
     updateUiState();
+}
+
+void MainWindow::onOpenTargetRadarWindow()
+{
+    if (!m_pageStack || !m_legacyPage || !m_targetRadarWindow) return;
+
+    const bool showRadar = m_actTargetRadar && m_actTargetRadar->isChecked();
+    if (showRadar) {
+        m_pageStack->setCurrentWidget(m_targetRadarWindow);
+        updateTargetRadarBackground();
+        m_targetRadarWindow->setScanAngle(m_latestAngle);
+        m_actTargetRadar->setText(u8s("\xE8\xBF\x94\xE5\x9B\x9E\xE4\xB8\xBB\xE7\x95\x8C\xE9\x9D\xA2"));
+    } else {
+        m_pageStack->setCurrentWidget(m_legacyPage);
+        m_actTargetRadar->setText(u8s("\xE7\x9B\xAE\xE6\xA0\x87\xE9\x9B\xB7\xE8\xBE\xBE"));
+    }
+}
+
+void MainWindow::updateTargetRadarBackground()
+{
+    if (!m_targetRadarWindow && !m_compactTargetRadar) return;
+    if (m_uiThumbRgb.isNull() && m_uiThumbBw.isNull()) return;
+
+    // m_uiThumbBw is already aligned by PanoramaCache, so neither view rotates it again.
+    if (m_compactTargetRadar && m_compactTargetRadar->isVisible()) {
+        m_compactTargetRadar->setPanorama(
+            !m_uiThumbBw.isNull() ? m_uiThumbBw : m_uiThumbRgb, false);
+    }
+    if (m_targetRadarWindow && m_targetRadarWindow->isVisible()) {
+#ifdef DMX_ADVANCED_DETECTION
+        m_targetRadarWindow->setLivePanoramas(m_uiThumbRgb, m_uiThumbBw, false);
+#else
+        if (!m_uiThumbBw.isNull()) m_targetRadarWindow->setLivePanorama(m_uiThumbBw, false);
+#endif
+    }
 }
 
 void MainWindow::updateUiState()
@@ -1001,6 +1358,95 @@ bool MainWindow::crossedZero(double prevAngleDeg, double currentAngleDeg)
 {
     return qAbs(currentAngleDeg - prevAngleDeg) > 180.0;
 }
+
+void MainWindow::updateReplaySweep(double angleDeg)
+{
+    if (!m_replayMode) return;
+
+    const double displayAngle = normalizeReplayAngle(angleDeg);
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    m_latestAngle = displayAngle;
+    if (m_prevRadarSweepAngle >= 0.0) {
+        pruneDetectedRadarTargets(nowMs, true);
+    }
+    m_prevRadarSweepAngle = displayAngle;
+    if (radarView) radarView->setCurrentAngle(displayAngle);
+    if (m_compactTargetRadar) m_compactTargetRadar->setScanAngle(displayAngle);
+    if (m_targetRadarWindow) m_targetRadarWindow->setScanAngle(displayAngle);
+    if (m_angleLabel) {
+        m_angleLabel->setText(QStringLiteral("%1").arg(displayAngle, 0, 'f', 2) + QChar(0x00B0));
+    }
+    if (m_colorThread) m_colorThread->setCurrentAngle(displayAngle);
+    if (m_thermalThread) m_thermalThread->setCurrentAngle(displayAngle);
+}
+
+void MainWindow::advanceReplaySweep()
+{
+    if (!m_replayMode || !m_isDeviceOpen || !m_replaySweepClock.isValid()) return;
+
+    const qint64 elapsedMs = m_replaySweepClock.restart();
+    if (elapsedMs <= 0) return;
+
+    const double degreesPerSecond = 360.0 / 8.0;
+    m_replaySweepAngleDeg = normalizeReplayAngle(
+        m_replaySweepAngleDeg - degreesPerSecond * ((double)elapsedMs / 1000.0));
+    updateReplaySweep(m_replaySweepAngleDeg);
+}
+
+bool MainWindow::scanCrossedAngle(double prevAngleDeg, double currentAngleDeg, double targetAngleDeg) const
+{
+    auto normalize = [](double a) {
+        while (a < 0.0) a += 360.0;
+        while (a >= 360.0) a -= 360.0;
+        return a;
+    };
+
+    const double prev = normalize(prevAngleDeg);
+    const double current = normalize(currentAngleDeg);
+    const double target = normalize(targetAngleDeg);
+    double delta = current - prev;
+    while (delta > 180.0) delta -= 360.0;
+    while (delta < -180.0) delta += 360.0;
+    if (qAbs(delta) < 0.001) return false;
+
+    if (delta > 0.0) {
+        double distance = target - prev;
+        while (distance <= 0.0) distance += 360.0;
+        return distance <= delta;
+    }
+
+    double distance = prev - target;
+    while (distance <= 0.0) distance += 360.0;
+    return distance <= -delta;
+}
+
+void MainWindow::pruneDetectedRadarTargets(qint64 nowMs, bool removeScanned)
+{
+    const AppConfig &cfg = AppConfig::instance();
+    bool changed = false;
+    if (m_detectTargetMs.size() != m_simTargets.size()) {
+        m_simTargets.clear();
+        m_detectTargetMs.clear();
+        changed = true;
+    }
+
+    const qint64 cutoff = nowMs - cfg.detectRadarHoldMs;
+    const qint64 minVisibleMs = qMax<qint64>(250, qMin<qint64>(1000, cfg.detectRadarHoldMs));
+    for (int i = m_simTargets.size() - 1; i >= 0; --i) {
+        if (i >= m_detectTargetMs.size()) continue;
+        const qint64 ageMs = nowMs - m_detectTargetMs[i];
+        const bool expired = m_detectTargetMs[i] < cutoff;
+        const bool scanned = removeScanned && ageMs >= minVisibleMs &&
+                             scanCrossedAngle(m_prevRadarSweepAngle, m_latestAngle, m_simTargets[i].angle);
+        if (expired || scanned) {
+            m_simTargets.remove(i);
+            m_detectTargetMs.remove(i);
+            changed = true;
+        }
+    }
+
+    if (changed && radarView) radarView->setTargets(m_simTargets);
+}
 double MainWindow::toRelativeAngle(double rawAngleDeg)
 {
     double a = rawAngleDeg;
@@ -1017,6 +1463,29 @@ void MainWindow::onActionOpenDevice()
 {
     if (m_isDeviceOpen || m_waitingForRunAngle) return;
 
+    if (m_replayMode) {
+        m_isDeviceOpen = true;
+        m_waitingForRunAngle = false;
+        m_zeroAngleInited = false;
+        m_prevRadarSweepAngle = -1.0;
+        m_angleHistory.clear();
+        m_replaySweepClock.start();
+        updateReplaySweep(m_replaySweepAngleDeg);
+        if (m_replaySweepTimer) m_replaySweepTimer->start();
+        sendCommand(QStringLiteral("DMX_REPLAY_START;"));
+        updateUiState();
+        m_lapTimeLabel->setText(u8s("\xE5\x9C\x88\xE9\x80\x9F\x3A\x20\x38\x2E\x30\x30\x20\xE7\xA7\x92\x20\x28\xE5\x9B\x9E\xE6\x94\xBE\x29"));
+        addLog(QStringLiteral("REPLAY"),
+               u8s("\xE5\xB7\xB2\xE5\x90\xAF\xE5\x8A\xA8\x20\x32\x30\x32\x36\x30\x37\x32\x33\x20\xE5\x9F\xBA\xE5\x87\x86\xE6\x95\xB0\xE6\x8D\xAE\xE5\x9B\x9E\xE6\x94\xBE\xEF\xBC\x8C\xE5\x9B\xBA\xE5\xAE\x9A\x20\x38\x20\xE7\xA7\x92\x2F\xE5\x9C\x88"),
+               QStringLiteral("#6A9955"));
+        if (ui->statusbar) {
+            ui->statusbar->showMessage(
+                u8s("\xE5\x9B\x9E\xE6\x94\xBE\xE5\xB7\xB2\xE5\x90\xAF\xE5\x8A\xA8\xEF\xBC\x9A\x32\x30\x32\x36\x30\x37\x32\x33\xEF\xBC\x8C\x38\x20\xE7\xA7\x92\x2F\xE5\x9C\x88"),
+                4000);
+        }
+        return;
+    }
+
     QString turntableErr;
     if (m_ctrlDialog && m_ctrlDialog->runWithCurrentSettings(&turntableErr)) {
         const TurntableControlDialog::Settings s = m_ctrlDialog->currentSettings();
@@ -1024,6 +1493,7 @@ void MainWindow::onActionOpenDevice()
         m_waitingForRunAngle = true;
         m_isDeviceOpen = false;
         m_zeroAngleInited = false;
+        m_prevRadarSweepAngle = -1.0;
         m_angleHistory.clear();
         m_lastAngleDiagMs = 0;
         updateUiState();
@@ -1051,6 +1521,23 @@ void MainWindow::onActionOpenDevice()
 void MainWindow::onActionCloseDevice()
 {
     stopRecordingNow();
+    if (m_replayMode) {
+        if (m_isDeviceOpen) sendCommand(QStringLiteral("DMX_REPLAY_STOP;"));
+        m_isDeviceOpen = false;
+        m_waitingForRunAngle = false;
+        if (m_replaySweepTimer) m_replaySweepTimer->stop();
+        m_replaySweepClock.invalidate();
+        updateUiState();
+        addLog(QStringLiteral("REPLAY"),
+               u8s("\xE5\x9B\x9E\xE6\x94\xBE\xE5\xB7\xB2\xE6\x9A\x82\xE5\x81\x9C\xEF\xBC\x8C\xE5\x86\x8D\xE6\xAC\xA1\xE7\x82\xB9\xE5\x87\xBB\xE8\xAE\xBE\xE5\xA4\x87\xE8\xBF\x90\xE8\xA1\x8C\xE5\x8F\xAF\xE7\xBB\xA7\xE7\xBB\xAD"),
+               QStringLiteral("#569CD6"));
+        if (ui->statusbar) {
+            ui->statusbar->showMessage(
+                u8s("\xE5\x9B\x9E\xE6\x94\xBE\xE5\xB7\xB2\xE6\x9A\x82\xE5\x81\x9C"),
+                3000);
+        }
+        return;
+    }
     if (m_isDeviceOpen || m_waitingForRunAngle) {
         sendCommand("TG_CLOSE_DEVICE;");
     }
@@ -1058,8 +1545,9 @@ void MainWindow::onActionCloseDevice()
     if (m_ctrlDialog) m_ctrlDialog->stopAndDisableOrtho();
     else if (m_driver) {
         m_driver->stop();
-        QThread::msleep(40);
-        m_driver->disableOrtho();
+        QTimer::singleShot(40, this, [this]() {
+            if (m_driver && m_driver->isOpen()) m_driver->disableOrtho();
+        });
     }
     m_isDeviceOpen = false;
     m_zeroAngleInited = false;
@@ -1167,8 +1655,9 @@ void MainWindow::onClearUiClicked()
     blackImg.fill(Qt::black);
     colorRoiView->updateImage(blackImg);
     thermalRoiView->updateImage(blackImg);
-    captureView->updateImage(blackImg);
     radarFeedbackView->updateImage(blackImg);
+    if (m_targetRadarWindow) m_targetRadarWindow->clearTargets();
+    updateTargetRadarBackground();
 
     // NOTE: intentionally do NOT reset the zero-angle reference here. Resetting it
     // would re-anchor 0deg to wherever the turntable happens to be at clear time,
@@ -1179,6 +1668,8 @@ void MainWindow::onClearUiClicked()
     if(m_logBrowser) m_logBrowser->clear();
 
     for(auto& target : m_simTargets) { target.isDetected = false; }
+    m_detectTargetMs.clear();
+    m_prevRadarSweepAngle = -1.0;
     radarView->setTargets(m_simTargets);
 
     if (m_panoCache) m_panoCache->resetAll();
@@ -1253,11 +1744,11 @@ void MainWindow::drainRender()
     if (!dirtyBw.isNull()) m_panoBwDirty = true;
 
     const qint64 nowMs = m_perfTimer.isValid() ? m_perfTimer.elapsed() : 0;
-    if ((nowMs - m_lastDetectMs) >= 120) {
+    if (!AppConfig::instance().detectEnabled && (nowMs - m_lastDetectMs) >= 120) {
         m_lastDetectMs = nowMs;
         checkTargetDetection(m_latestAngle);
     }
-    if (m_prevCheckAngle > 300.0 && m_latestAngle < 60.0) {
+    if (!AppConfig::instance().detectEnabled && m_prevCheckAngle > 300.0 && m_latestAngle < 60.0) {
         bool needReset = false;
         for (auto &target : m_simTargets) {
             if (target.isDetected) { target.isDetected = false; needReset = true; }
@@ -1280,6 +1771,15 @@ void MainWindow::onPanoRefreshTick()
         thermalPanoramaView->updateImage(m_uiThumbBw);
         m_panoBwDirty = false;
     }
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    const bool radarPageVisible = m_targetRadarWindow && m_targetRadarWindow->isVisible();
+    const bool compactRadarVisible = m_compactTargetRadar && m_compactTargetRadar->isVisible();
+    if ((radarPageVisible || compactRadarVisible)
+        && (!m_uiThumbRgb.isNull() || !m_uiThumbBw.isNull()) &&
+        (nowMs - m_lastTargetRadarBgMs) >= 250) {
+        m_lastTargetRadarBgMs = nowMs;
+        updateTargetRadarBackground();
+    }
 }
 
 void MainWindow::onPathReceived(const QString &type, const QString &path, const QString &sender, qint64 rxMs)
@@ -1287,21 +1787,41 @@ void MainWindow::onPathReceived(const QString &type, const QString &path, const 
     const QString t = type.trimmed().toUpper();
     if (!m_isDeviceOpen || m_waitingForRunAngle) return;
 
-    double angleDeg = m_zeroAngleInited ? m_latestAngle : -1.0;
+    double angleDeg = -1.0;
+    if (m_replayMode) {
+        quint64 fileIndex = 0;
+        if (parseReplayFileIndex(path, &fileIndex)) {
+            angleDeg = replayFrameAngle(fileIndex);
+            if (t == QStringLiteral("BW") || t == QStringLiteral("GRAY")) {
+                m_replaySweepAngleDeg = angleDeg;
+                m_replaySweepClock.start();
+                updateReplaySweep(angleDeg);
+                if (!m_replayMappingLogged) {
+                    m_replayMappingLogged = true;
+                    addLog(QStringLiteral("REPLAY"),
+                           QStringLiteral("frame map: index=0,1,2 -> angle=0,337.5,315; "
+                                          "direction=left; pixel=CCW90+mirrorH; radar=30ms smooth"),
+                           QStringLiteral("#FFD54F"));
+                }
+            }
+        }
+    } else {
+        angleDeg = m_zeroAngleInited ? m_latestAngle : -1.0;
+    }
     qint64 latencyMs = m_captureLatencyRgbMs;
     if (t == "BW" || t == "GRAY") latencyMs = m_captureLatencyBwMs;
 
     bool lookupClamped = false;
     qint64 lookupBracketMs = 0;
     bool lookupOk = false;
-    if (m_zeroAngleInited && m_angleLookup && !m_angleHistory.empty()) {
+    if (!m_replayMode && m_zeroAngleInited && m_angleLookup && !m_angleHistory.empty()) {
         double looked = -1.0;
         lookupOk = m_angleHistory.angleAt(rxMs - latencyMs, &looked, &lookupClamped, &lookupBracketMs);
         if (lookupOk && looked >= 0.0) angleDeg = looked;
     }
 
     const qint64 nowD = QDateTime::currentMSecsSinceEpoch();
-    if (m_angleLookup && (nowD - m_lastAngleDiagMs) > 1000) {
+    if (!m_replayMode && m_angleLookup && (nowD - m_lastAngleDiagMs) > 1000) {
         m_lastAngleDiagMs = nowD;
         addLog(QStringLiteral("ANGLE"),
             QString("type=%1 recv=%2 capture=%3 D=%4ms hist=%5 recent1s=%6 bracket=%7ms clamped=%8 ok=%9")
@@ -1327,6 +1847,186 @@ void MainWindow::onPathReceived(const QString &type, const QString &path, const 
     }
 }
 
+void MainWindow::onCandidateDetected(const QString &stream, double angle, int panoX, int panoY, double score, const QString &cropPath,
+                                     int roiBoxX1, int roiBoxY1, int roiBoxX2, int roiBoxY2,
+                                     const QString &className)
+{
+    const AppConfig &cfg = AppConfig::instance();
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    pruneDetectedRadarTargets(nowMs, false);
+    replaceCandidateCropFromPanorama(stream, panoX, panoY, cropPath);
+
+    bool manualFeedbackDropped = false;
+    if (m_targetRadarWindow) {
+        TargetRecord rec;
+        rec.id = QStringLiteral("T-%1").arg(++m_targetRadarSeq, 4, 10, QLatin1Char('0'));
+        rec.time = QDateTime::currentDateTime();
+        rec.firstTime = rec.time;
+        rec.lastTime = rec.time;
+        rec.imagePath = cropPath;
+        rec.stream = stream.trimmed().toUpper();
+        rec.className = className.trimmed().toLower();
+        rec.state = QStringLiteral("new");
+        rec.azimuthDeg = angle;
+        rec.confidence = qBound(0.0, score / 255.0, 1.0);
+        rec.classConfidence = rec.confidence;
+        rec.score = score;
+        rec.trackAgeSec = 0.0;
+        rec.hits = 1;
+        rec.panoX = panoX;
+        rec.panoY = panoY;
+        rec.frameX = 0;
+        rec.frameY = 0;
+#ifdef DMX_TEST_BUILD
+        const int panoramaHeight = qMax(2, cfg.fullHeight);
+        const double yNorm = qBound(0.0,
+            static_cast<double>(panoY) / static_cast<double>(panoramaHeight - 1),
+            1.0);
+        rec.elevationAngleDeg = (0.5 - yNorm) * cfg.cameraVerticalFovDeg;
+        rec.hasElevationAngle = true;
+#endif
+        rec.hasRoiBox = (roiBoxX2 > roiBoxX1 && roiBoxY2 > roiBoxY1);
+        rec.roiBoxX1 = roiBoxX1;
+        rec.roiBoxY1 = roiBoxY1;
+        rec.roiBoxX2 = roiBoxX2;
+        rec.roiBoxY2 = roiBoxY2;
+        const QString association = m_targetRadarWindow->addOrUpdateTarget(rec);
+        manualFeedbackDropped = association.startsWith(QStringLiteral("manual_feedback_drop"));
+        if (!association.isEmpty()) {
+            addLog(
+                QStringLiteral("TARGET_ASSOC"),
+                association,
+                manualFeedbackDropped
+                    ? QStringLiteral("#90A4AE")
+                    : association.startsWith(QStringLiteral("merge"))
+                    ? QStringLiteral("#6A9955")
+                    : QStringLiteral("#569CD6"));
+        }
+    }
+    if (manualFeedbackDropped) return;
+
+    bool merged = false;
+    for (int i = 0; i < m_simTargets.size() && i < m_detectTargetMs.size(); ++i) {
+        double diff = qAbs(double(m_simTargets[i].angle) - angle);
+        if (diff > 180.0) diff = 360.0 - diff;
+        if (diff <= 2.0) {
+            m_simTargets[i].angle = (int)qRound(angle);
+            m_simTargets[i].isDetected = true;
+            m_detectTargetMs[i] = nowMs;
+            merged = true;
+            break;
+        }
+    }
+    if (!merged) {
+        RadarTarget target((int)qRound(angle));
+        target.isDetected = true;
+        m_simTargets.append(target);
+        m_detectTargetMs.append(nowMs);
+    }
+    while (m_simTargets.size() > cfg.detectMaxRadarTargets && !m_simTargets.isEmpty()) {
+        m_simTargets.remove(0);
+        if (!m_detectTargetMs.isEmpty()) m_detectTargetMs.remove(0);
+    }
+    radarView->setTargets(m_simTargets);
+
+    addLog(QStringLiteral("DETECT_UI"),
+           QStringLiteral("%1 class=%2 angle=%3 x=%4 y=%5 score=%6 crop=%7")
+               .arg(stream)
+               .arg(className.isEmpty() ? QStringLiteral("unknown") : className)
+               .arg(angle, 0, 'f', 1)
+               .arg(panoX)
+               .arg(panoY)
+               .arg(score, 0, 'f', 1)
+               .arg(cropPath),
+           QStringLiteral("#FF5252"));
+
+    if (m_panoCache && radarFeedbackView) {
+        const QString s = stream.trimmed().toUpper();
+        QImage feedback = (s == QStringLiteral("BW"))
+            ? m_panoCache->extractFullBwSliceByAngle(angle, true)
+            : m_panoCache->extractFullRgbSliceByAngle(angle);
+        if (feedback.isNull()) {
+            feedback = m_panoCache->extractFullRgbSliceByAngle(angle);
+        }
+        if (!feedback.isNull()) {
+            radarFeedbackView->updateImage(feedback);
+        }
+    }
+}
+
+void MainWindow::onStaticClutterDetected(const QString &stream,
+                                         const QString &className,
+                                         int panoX,
+                                         int panoY,
+                                         int trackId,
+                                         int stableHits,
+                                         double contextScore,
+                                         const QString &cropPath)
+{
+    replaceCandidateCropFromPanorama(stream, panoX, panoY, cropPath);
+    if (m_targetRadarWindow) {
+        m_targetRadarWindow->suppressStaticClutter(
+            stream,
+            className,
+            panoX,
+            panoY,
+            trackId,
+            stableHits,
+            contextScore);
+    }
+}
+
+void MainWindow::replaceCandidateCropFromPanorama(const QString &stream,
+                                                   int panoX,
+                                                   int panoY,
+                                                   const QString &cropPath)
+{
+    if (!m_panoCache || cropPath.trimmed().isEmpty()) return;
+
+    const AppConfig &cfg = AppConfig::instance();
+    const int cropSize = qMax(32, cfg.detectCropSize);
+    const QString normalizedStream = stream.trimmed().toUpper();
+    QImage crop = normalizedStream == QStringLiteral("BW") || normalizedStream == QStringLiteral("GRAY")
+        ? m_panoCache->extractFullBwCrop(panoX, panoY, cropSize)
+        : m_panoCache->extractFullRgbCrop(panoX, panoY, cropSize);
+    if (crop.isNull()) {
+        addLog(QStringLiteral("CROP"),
+               QStringLiteral("panorama crop unavailable stream=%1 x=%2 y=%3 path=%4")
+                   .arg(normalizedStream)
+                   .arg(panoX)
+                   .arg(panoY)
+                   .arg(cropPath),
+               QStringLiteral("#FFB74D"));
+        return;
+    }
+
+    QSaveFile output(cropPath);
+    if (!output.open(QIODevice::WriteOnly)) {
+        addLog(QStringLiteral("CROP"),
+               QStringLiteral("panorama crop open failed: %1 error=%2")
+                   .arg(cropPath, output.errorString()),
+               QStringLiteral("#F44336"));
+        return;
+    }
+
+    QImageWriter writer(&output, "jpg");
+    writer.setQuality(cfg.detectJpegQuality);
+    if (!writer.write(crop)) {
+        output.cancelWriting();
+        addLog(QStringLiteral("CROP"),
+               QStringLiteral("panorama crop write failed: %1 error=%2")
+                   .arg(cropPath, writer.errorString()),
+               QStringLiteral("#F44336"));
+        return;
+    }
+    if (!output.commit()) {
+        addLog(QStringLiteral("CROP"),
+               QStringLiteral("panorama crop commit failed: %1 error=%2")
+                   .arg(cropPath, output.errorString()),
+               QStringLiteral("#F44336"));
+    }
+}
+
 void MainWindow::onRadarClicked(int angle)
 {
     if (!m_panoCache) return;
@@ -1348,21 +2048,6 @@ void MainWindow::checkTargetDetection(double currentAngle)
             if (diff < tolerance) {
                 target.isDetected = true;
                 targetsChanged = true;
-                m_pendingCaptureAngle = target.angle;
-                if (m_panoCache) {
-                    QImage roi = m_panoCache->extractFullRgbSliceByAngle(target.angle);
-                    if (!roi.isNull()) {
-                        QImage targetImg = roi;
-                        QPainter p(&targetImg);
-                        p.setPen(QPen(Qt::red, 8));
-                        p.drawRect(targetImg.rect().adjusted(8, 8, -8, -8));
-                        p.setPen(Qt::green);
-                        p.setFont(QFont("Arial", 40, QFont::Bold));
-                        p.drawText(40, 80, QString("DETECTED: %1 deg").arg(m_pendingCaptureAngle));
-                        p.end();
-                        captureView->updateImage(targetImg);
-                    }
-                }
             }
         }
     }

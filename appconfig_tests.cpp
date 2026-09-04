@@ -33,8 +33,9 @@ private slots:
                 "\"paths\":{\"dataRoot\":\"/data/dmx\",\"saveRoot\":\"\",\"recordRoot\":\"/rec\",\"logRoot\":\"\",\"shareMount\":\"/mnt/share\"},"
                 "\"capture\":{\"angleLookup\":false,\"latencyMs\":10,\"latencyRgbMs\":300,\"latencyBwMs\":200,\"uiDropStale\":false,\"uiQueueCap\":4},"
                 "\"panorama\":{\"fullWidth\":65536,\"fullHeight\":4096,\"thumbWidth\":8192,\"thumbHeight\":240,\"previewWidth\":4096,\"previewJpegQuality\":90},"
+                "\"camera\":{\"verticalFovDeg\":26.88},"
                 "\"recording\":{\"rollMinutes\":7},"
-                "\"device\":{\"ip\":\"192.168.4.9\",\"cmdPortSend\":5011,\"cmdPortReply\":5012},"
+                "\"device\":{\"ip\":\"192.168.4.9\",\"cmdPortSend\":5011,\"cmdPortReply\":5012,\"pathPort\":8011},"
                 "\"turntable\":{\"serialPort\":\"COM7\",\"baudRate\":115200,\"direction\":\"left\",\"speed\":57,\"orthoEnabled\":false,\"orthoLength\":2048,\"feedbackEnabled\":false}"
                 "}");
         f.close();
@@ -45,6 +46,7 @@ private slots:
         QCOMPARE(cfg.saveRoot, QStringLiteral("/data/dmx/saves"));
         QCOMPARE(cfg.recordRoot, QStringLiteral("/rec"));
         QCOMPARE(cfg.logRoot, QStringLiteral("/data/dmx/logs"));
+        QCOMPARE(cfg.detectSkyMaskSaveRoot, QStringLiteral("/data/dmx/sky_masks"));
         QCOMPARE(cfg.shareMount, QStringLiteral("/mnt/share"));
         QCOMPARE(cfg.angleLookup, false);
         QCOMPARE((int)cfg.captureLatencyMs, 10);
@@ -54,6 +56,7 @@ private slots:
         QCOMPARE(cfg.uiQueueCap, 4);
         QCOMPARE(cfg.fullWidth, 65536);
         QCOMPARE(cfg.fullHeight, 4096);
+        QVERIFY(qAbs(cfg.cameraVerticalFovDeg - 26.88) < 0.0001);
         QCOMPARE(cfg.thumbWidth, 8192);
         QCOMPARE(cfg.thumbHeight, 240);
         QCOMPARE(cfg.previewWidth, 4096);
@@ -62,6 +65,8 @@ private slots:
         QCOMPARE(cfg.deviceIp, QStringLiteral("192.168.4.9"));
         QCOMPARE((int)cfg.cmdPortSend, 5011);
         QCOMPARE((int)cfg.cmdPortReply, 5012);
+        QCOMPARE((int)cfg.pathPort, 8011);
+        QCOMPARE(cfg.replayMode, false);
         QCOMPARE(cfg.turntableSerialPort, QStringLiteral("COM7"));
         QCOMPARE(cfg.turntableBaudRate, 115200);
         QCOMPARE(cfg.turntableDirection, QStringLiteral("left"));
@@ -87,24 +92,36 @@ private slots:
         f.close();
 
         qputenv("DMX_SAVE_ROOT", "/env/save");
+        qputenv("DMX_SKY_MASK_SAVE_ROOT", "/env/sky_masks");
         qputenv("DMX_CAPTURE_LATENCY_MS_RGB", "345");
         qputenv("DMX_UI_NODROP", "1");
         qputenv("DMX_TURNTABLE_DIRECTION", "right");
         qputenv("DMX_TURNTABLE_SPEED", "85");
+        qputenv("DMX_PATH_PORT", "18001");
+        qputenv("DMX_REPLAY_MODE", "1");
+        qputenv("DMX_CAMERA_VERTICAL_FOV_DEG", "31.5");
 
         const AppConfig cfg = AppConfig::loadFile(path, true);
 
         QCOMPARE(cfg.saveRoot, QStringLiteral("/env/save"));
+        QCOMPARE(cfg.detectSkyMaskSaveRoot, QStringLiteral("/env/sky_masks"));
         QCOMPARE((int)cfg.captureLatencyRgbMs, 345);
         QCOMPARE(cfg.uiDropStale, false);
         QCOMPARE(cfg.turntableDirection, QStringLiteral("right"));
         QCOMPARE(cfg.turntableSpeed, 85);
+        QCOMPARE((int)cfg.pathPort, 18001);
+        QCOMPARE(cfg.replayMode, true);
+        QVERIFY(qAbs(cfg.cameraVerticalFovDeg - 31.5) < 0.0001);
 
         qunsetenv("DMX_SAVE_ROOT");
+        qunsetenv("DMX_SKY_MASK_SAVE_ROOT");
         qunsetenv("DMX_CAPTURE_LATENCY_MS_RGB");
         qunsetenv("DMX_UI_NODROP");
         qunsetenv("DMX_TURNTABLE_DIRECTION");
         qunsetenv("DMX_TURNTABLE_SPEED");
+        qunsetenv("DMX_PATH_PORT");
+        qunsetenv("DMX_REPLAY_MODE");
+        qunsetenv("DMX_CAMERA_VERTICAL_FOV_DEG");
     }
 
     void turntableOrthoConfigCanStartDisabled()

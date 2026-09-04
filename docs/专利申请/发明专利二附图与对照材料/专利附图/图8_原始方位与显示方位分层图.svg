@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900">
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,4 L0,8 Z" fill="#000"/></marker></defs>
+<style>text{font-family:"Noto Sans CJK SC","Microsoft YaHei",sans-serif;fill:#000}.box{fill:#fff;stroke:#000;stroke-width:2}.thin{fill:none;stroke:#000;stroke-width:1.5}.line{fill:none;stroke:#000;stroke-width:2}.dash{fill:none;stroke:#000;stroke-width:2;stroke-dasharray:9 7}.arrow{fill:none;stroke:#000;stroke-width:2;marker-end:url(#arrow)}.small{font-size:18px}.normal{font-size:22px}.large{font-size:27px;font-weight:600}.mono{font-family:monospace;font-size:18px}</style>
+<rect x="1" y="1" width="1398" height="898" fill="#fff" stroke="none"/>
+<text x="700" y="45" text-anchor="middle" class="large" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700" dy="0">原始关联坐标与显示校准坐标分层</tspan>
+</text>
+<rect x="80" y="155" width="320" height="140" rx="10" class="box"/>
+<text x="93" y="180" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="93" dy="0">801</tspan>
+</text>
+<text x="240.0" y="204.0" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="240.0" dy="0">事件原始坐标层</tspan>
+<tspan x="240.0" dy="28">θraw、β、事件ID</tspan>
+<tspan x="240.0" dy="28">供关联和审计日志使用</tspan>
+</text>
+<rect x="80" y="480" width="320" height="130" rx="10" class="box"/>
+<text x="93" y="505" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="93" dy="0">802</tspan>
+</text>
+<text x="240.0" y="524.0" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="240.0" dy="0">北向显示偏置</tspan>
+<tspan x="240.0" dy="28">δN</tspan>
+<tspan x="240.0" dy="28">独立保存</tspan>
+</text>
+<rect x="520" y="155" width="350" height="140" rx="10" class="box"/>
+<text x="533" y="180" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="533" dy="0">803</tspan>
+</text>
+<text x="695.0" y="206.0" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="695.0" dy="0">事件显示变换</tspan>
+<tspan x="695.0" dy="25">θdisplay=mod(θraw-δN,360°)</tspan>
+<tspan x="695.0" dy="25">β保持不变</tspan>
+</text>
+<rect x="520" y="480" width="350" height="130" rx="10" class="box"/>
+<text x="533" y="505" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="533" dy="0">804</tspan>
+</text>
+<text x="695.0" y="526.0" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="695.0" dy="0">全景背景变换</tspan>
+<tspan x="695.0" dy="25">按同一δN水平循环移位</tspan>
+<tspan x="695.0" dy="25">再执行高度极坐标投影</tspan>
+</text>
+<line x1="400" y1="225" x2="520" y2="225" class="line"/>
+<polygon points="520,225 507.00,231.00 507.00,219.00" fill="#000"/>
+<line x1="400" y1="545" x2="520" y2="545" class="line"/>
+<polygon points="520,545 507.00,551.00 507.00,539.00" fill="#000"/>
+<polyline points="240,480 240,390 695,390 695,295" class="dash"/>
+<polygon points="695,295 701.00,308.00 689.00,308.00" fill="#000"/>
+<rect x="990" y="300" width="300" height="170" rx="10" class="box"/>
+<text x="1003" y="325" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="1003" dy="0">805</tspan>
+</text>
+<text x="1140.0" y="364.0" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="1140.0" dy="0">坐标一致显示</tspan>
+<tspan x="1140.0" dy="28">事件标记与背景同步旋转</tspan>
+<tspan x="1140.0" dy="28">历史关联结果不改变</tspan>
+</text>
+<line x1="870" y1="225" x2="990" y2="350" class="line"/>
+<polygon points="990,350 976.67,344.78 985.33,336.47" fill="#000"/>
+<line x1="870" y1="545" x2="990" y2="420" class="line"/>
+<polygon points="990,420 985.33,433.53 976.67,425.22" fill="#000"/>
+<rect x="490" y="700" width="420" height="100" rx="10" class="dash"/>
+<text x="503" y="725" text-anchor="start" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="503" dy="0">806</tspan>
+</text>
+<text x="700.0" y="743.5" text-anchor="middle" class="small" font-family="Noto Sans CJK SC" font-style="normal" font-weight="normal">
+<tspan x="700.0" dy="0">禁止路径</tspan>
+<tspan x="700.0" dy="27">δN不得回写θraw或重新触发历史关联</tspan>
+</text>
+<text x="700.0" y="876" text-anchor="middle" class="normal" font-family="Noto Sans CJK SC" font-style="normal" font-weight="600">
+<tspan x="700.0" dy="0">图8</tspan>
+</text>
+</svg>
