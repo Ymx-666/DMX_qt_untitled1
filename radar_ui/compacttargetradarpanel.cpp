@@ -10,7 +10,6 @@
 #include <QPainter>
 #include <QResizeEvent>
 #include <QSizePolicy>
-#include <QStringList>
 #include <QVBoxLayout>
 
 static QString compactTargetClass(const QString &className)
@@ -60,7 +59,6 @@ CompactTargetRadarPanel::CompactTargetRadarPanel(QWidget *parent)
     layout->setContentsMargins(4, 4, 6, 4);
     layout->setSpacing(8);
 
-#ifdef DMX_TEST_BUILD
     setMinimumHeight(230);
 
     QWidget *listPane = new QWidget(this);
@@ -75,11 +73,14 @@ CompactTargetRadarPanel::CompactTargetRadarPanel(QWidget *parent)
     m_list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     m_list->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
     m_list->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_list->setWordWrap(true);
+    m_list->setTextElideMode(Qt::ElideNone);
     m_list->setMinimumWidth(210);
     listLayout->addWidget(listTitle);
     listLayout->addWidget(m_list, 1);
 
     m_radar = new TargetRadarWidget(this);
+    m_radar->setObjectName(QStringLiteral("compactTargetRadar"));
     m_radar->setCompactMode(true);
     m_radar->setMinimumWidth(280);
     m_radar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -98,6 +99,7 @@ CompactTargetRadarPanel::CompactTargetRadarPanel(QWidget *parent)
     m_preview->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     m_preview->setStyleSheet(QStringLiteral("background:#050708;border:1px solid #3b4c53;color:#718087;"));
     m_previewDetails = new QLabel(previewPane);
+    m_previewDetails->setObjectName(QStringLiteral("compactTargetPreviewDetails"));
     m_previewDetails->setAlignment(Qt::AlignLeft | Qt::AlignTop);
     m_previewDetails->setWordWrap(true);
     m_previewDetails->setTextFormat(Qt::RichText);
@@ -129,42 +131,6 @@ CompactTargetRadarPanel::CompactTargetRadarPanel(QWidget *parent)
         selectTarget(index);
     });
     updatePreview();
-    return;
-#endif
-
-    m_radar = new TargetRadarWidget(this);
-    m_radar->setCompactMode(true);
-    m_radar->setMinimumWidth(170);
-    m_radar->setMaximumWidth(280);
-    m_radar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-
-    QWidget *information = new QWidget(this);
-    information->setObjectName(QStringLiteral("compactTargetInformation"));
-    QVBoxLayout *informationLayout = new QVBoxLayout(information);
-    informationLayout->setContentsMargins(0, 3, 0, 2);
-    informationLayout->setSpacing(3);
-
-    QLabel *title = new QLabel(QStringLiteral("实时识别目标"), information);
-    title->setStyleSheet(QStringLiteral(
-        "font-size:12px;font-weight:600;color:#dce9e6;background:transparent;"));
-    m_details = new QLabel(information);
-    m_details->setAlignment(Qt::AlignLeft | Qt::AlignTop);
-    m_details->setWordWrap(true);
-    m_details->setTextFormat(Qt::RichText);
-    m_details->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    m_details->setStyleSheet(QStringLiteral(
-        "font-size:10px;color:#c7d5d2;background:transparent;"));
-
-    informationLayout->addWidget(title);
-    informationLayout->addWidget(m_details, 1);
-    layout->addWidget(m_radar, 5);
-    layout->addWidget(information, 6);
-
-    setStyleSheet(QStringLiteral(
-        "#compactTargetRadarPanel{background:#090c0f;border:1px solid #314149;}"
-        "#compactTargetInformation{background:#090c0f;}"
-        "#compactTargetInformation QLabel{background:transparent;}"));
-    updateTargetDetails();
 }
 
 void CompactTargetRadarPanel::setPanorama(const QImage &panorama, bool bwNeeds180Align)
@@ -177,7 +143,6 @@ void CompactTargetRadarPanel::setPanorama(const QImage &panorama, bool bwNeeds18
 
 void CompactTargetRadarPanel::setTargets(const QVector<TargetRecord> &targets)
 {
-#ifdef DMX_TEST_BUILD
     QString selectedId;
     if (m_selected >= 0 && m_selected < m_targets.size()) {
         selectedId = m_targets.at(m_selected).id;
@@ -194,57 +159,11 @@ void CompactTargetRadarPanel::setTargets(const QVector<TargetRecord> &targets)
         }
     }
     selectTarget(index);
-    return;
-#endif
-    m_targets = targets;
-    m_radar->setTargets(m_targets);
-    updateTargetDetails();
 }
 
 void CompactTargetRadarPanel::setScanAngle(double angleDeg)
 {
     m_radar->setScanAngle(angleDeg);
-}
-
-void CompactTargetRadarPanel::updateTargetDetails()
-{
-    if (m_targets.isEmpty()) {
-        m_details->setText(QStringLiteral(
-            "<span style='color:#718087'>当前无有效目标</span>"));
-        return;
-    }
-
-    QStringList rows;
-    const int count = qMin(3, m_targets.size());
-    for (int i = 0; i < count; ++i) {
-        const TargetRecord &target = m_targets.at(i);
-        const QDateTime last = target.lastTime.isValid() ? target.lastTime : target.time;
-        rows.push_back(QStringLiteral(
-            "<div style='margin-bottom:4px'>"
-            "<b style='color:#f1f6f5'>%1</b> "
-            "<span style='color:#7ee787'>%2</span> "
-            "<span style='color:#d4bfff'>%3</span><br>"
-            "方位 <span style='color:#8fe5d3'>%4°</span>　置信 %5　评分 %6<br>"
-            "命中 %7　%8　全景 %9,%10　%11"
-            "</div>")
-            .arg(target.id.toHtmlEscaped(),
-                 compactTargetClass(target.className),
-                 compactTargetStream(target.stream).toHtmlEscaped())
-            .arg(target.azimuthDeg, 0, 'f', 1)
-            .arg(qRound(qBound(0.0, target.confidence, 1.0) * 100.0))
-            .arg(target.score, 0, 'f', 0)
-            .arg(qMax(1, target.hits))
-            .arg(compactTargetState(target.state))
-            .arg(target.panoX)
-            .arg(target.panoY)
-            .arg(last.isValid() ? last.time().toString(QStringLiteral("HH:mm:ss"))
-                                : QStringLiteral("--")));
-    }
-    if (m_targets.size() > count) {
-        rows.push_back(QStringLiteral("<span style='color:#718087'>另有 %1 个有效目标</span>")
-                       .arg(m_targets.size() - count));
-    }
-    m_details->setText(rows.join(QString()));
 }
 
 void CompactTargetRadarPanel::resizeEvent(QResizeEvent *event)
@@ -255,7 +174,6 @@ void CompactTargetRadarPanel::resizeEvent(QResizeEvent *event)
 
 void CompactTargetRadarPanel::rebuildTargetList()
 {
-#ifdef DMX_TEST_BUILD
     if (!m_list) return;
     m_list->blockSignals(true);
     m_list->clear();
@@ -271,28 +189,41 @@ void CompactTargetRadarPanel::rebuildTargetList()
             const QString elevationText = target.hasElevationAngle
                 ? QStringLiteral("%1°").arg(elevation, 0, 'f', 2)
                 : QStringLiteral("--");
-            QListWidgetItem *item = new QListWidgetItem(
-                QStringLiteral("%1  %2\n方位 %3°  高度 %4  置信 %5%")
-                    .arg(target.id,
-                         compactTargetClass(target.className))
-                    .arg(target.azimuthDeg, 0, 'f', 1)
-                    .arg(elevationText)
-                    .arg(qRound(qBound(0.0, target.confidence, 1.0) * 100.0)),
-                m_list);
-            item->setSizeHint(QSize(190, 46));
+            const int confidence = qRound(qBound(0.0, target.confidence, 1.0) * 100.0);
+            const QString rowText = QStringLiteral("%1  %2\n方位 %3°  高度 %4  置信 %5%")
+                .arg(target.id, compactTargetClass(target.className))
+                .arg(target.azimuthDeg, 0, 'f', 1)
+                .arg(elevationText)
+                .arg(confidence);
+            QListWidgetItem *item = new QListWidgetItem(m_list);
+            item->setData(Qt::AccessibleTextRole, rowText);
+            item->setSizeHint(QSize(0, 50));
             item->setToolTip(QStringLiteral("%1 | %2 | %3")
                 .arg(compactTargetStream(target.stream),
                      compactTargetState(target.state),
                      target.imagePath));
+            QLabel *row = new QLabel(QStringLiteral(
+                "<div><b style='color:#f1f6f5'>%1</b> "
+                "<span style='color:#7ee787'>%2</span><br>"
+                "<span style='font-size:9px;color:#a9b7bb'>方位 %3°　高度 %4　置信 %5%</span></div>")
+                .arg(target.id.toHtmlEscaped(), compactTargetClass(target.className))
+                .arg(target.azimuthDeg, 0, 'f', 1)
+                .arg(elevationText)
+                .arg(confidence),
+                m_list);
+            row->setObjectName(QStringLiteral("compactTargetListRow"));
+            row->setTextFormat(Qt::RichText);
+            row->setContentsMargins(5, 2, 3, 2);
+            row->setStyleSheet(QStringLiteral("background:transparent;font-size:11px;"));
+            row->setAttribute(Qt::WA_TransparentForMouseEvents);
+            m_list->setItemWidget(item, row);
         }
     }
     m_list->blockSignals(false);
-#endif
 }
 
 void CompactTargetRadarPanel::selectTarget(int index)
 {
-#ifdef DMX_TEST_BUILD
     if (index < 0 || index >= m_targets.size()) index = -1;
     m_selected = index;
     if (m_radar) m_radar->setSelectedTarget(index);
@@ -302,14 +233,10 @@ void CompactTargetRadarPanel::selectTarget(int index)
         m_list->blockSignals(false);
     }
     updatePreview();
-#else
-    Q_UNUSED(index)
-#endif
 }
 
 void CompactTargetRadarPanel::updatePreview()
 {
-#ifdef DMX_TEST_BUILD
     if (!m_preview || !m_previewDetails) return;
     const double fov = AppConfig::instance().cameraVerticalFovDeg;
     if (m_selected < 0 || m_selected >= m_targets.size()) {
@@ -357,12 +284,10 @@ void CompactTargetRadarPanel::updatePreview()
         .arg(qRound(qBound(0.0, target.confidence, 1.0) * 100.0))
         .arg(compactTargetStream(target.stream).toHtmlEscaped()));
     updatePreviewPixmap();
-#endif
 }
 
 void CompactTargetRadarPanel::updatePreviewPixmap()
 {
-#ifdef DMX_TEST_BUILD
     if (!m_preview) return;
     if (m_previewImage.isNull()) {
         m_preview->setPixmap(QPixmap());
@@ -376,5 +301,4 @@ void CompactTargetRadarPanel::updatePreviewPixmap()
     if (!size.isValid()) return;
     m_preview->setPixmap(QPixmap::fromImage(m_previewImage).scaled(
         size, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-#endif
 }

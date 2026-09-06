@@ -20,10 +20,8 @@ private:
     QLabel *m_time = nullptr;
     QLabel *m_azimuth = nullptr;
     QLabel *m_pano = nullptr;
-#ifdef DMX_TEST_BUILD
     QLabel *m_verticalFov = nullptr;
     QLabel *m_elevation = nullptr;
-#endif
     QLabel *m_frame = nullptr;
     QLabel *m_stream = nullptr;
 #ifdef DMX_ADVANCED_DETECTION

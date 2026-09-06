@@ -58,10 +58,10 @@ TargetInfoPanel::TargetInfoPanel(QWidget *parent)
     m_time = makeValue(this);
     m_azimuth = makeValue(this);
     m_pano = makeValue(this);
-#ifdef DMX_TEST_BUILD
     m_verticalFov = makeValue(this);
+    m_verticalFov->setObjectName(QStringLiteral("targetVerticalFovValue"));
     m_elevation = makeValue(this);
-#endif
+    m_elevation->setObjectName(QStringLiteral("targetElevationValue"));
     m_frame = makeValue(this);
     m_stream = makeValue(this);
 #ifdef DMX_ADVANCED_DETECTION
@@ -73,10 +73,8 @@ TargetInfoPanel::TargetInfoPanel(QWidget *parent)
     form->addRow(QStringLiteral("时间"), m_time);
     form->addRow(QStringLiteral("方位角"), m_azimuth);
     form->addRow(QStringLiteral("全景坐标"), m_pano);
-#ifdef DMX_TEST_BUILD
     form->addRow(QStringLiteral("设备垂直视场角"), m_verticalFov);
     form->addRow(QStringLiteral("目标高度角"), m_elevation);
-#endif
     form->addRow(QStringLiteral("帧坐标"), m_frame);
     form->addRow(QStringLiteral("视频源"), m_stream);
 #ifdef DMX_ADVANCED_DETECTION
@@ -94,13 +92,11 @@ void TargetInfoPanel::setTarget(const TargetRecord &t)
     m_time->setText(t.time.toString(QStringLiteral("yyyy-MM-dd HH:mm:ss")));
     m_azimuth->setText(QStringLiteral("%1 度").arg(t.azimuthDeg, 0, 'f', 1));
     m_pano->setText(QStringLiteral("%1 / %2").arg(t.panoX).arg(t.panoY));
-#ifdef DMX_TEST_BUILD
     m_verticalFov->setText(QStringLiteral("%1 度")
         .arg(AppConfig::instance().cameraVerticalFovDeg, 0, 'f', 2));
     m_elevation->setText(t.hasElevationAngle
         ? QStringLiteral("%1 度").arg(t.elevationAngleDeg, 0, 'f', 2)
         : QStringLiteral("--"));
-#endif
     m_frame->setText(QStringLiteral("%1 / %2").arg(t.frameX).arg(t.frameY));
     m_stream->setText(displayStream(t.stream));
 #ifdef DMX_ADVANCED_DETECTION
@@ -113,10 +109,8 @@ void TargetInfoPanel::setTarget(const TargetRecord &t)
 void TargetInfoPanel::clearTarget()
 {
     QList<QLabel*> labels = {m_id, m_time, m_azimuth, m_pano, m_frame, m_stream, m_confidence, m_state};
-#ifdef DMX_TEST_BUILD
     labels.push_back(m_verticalFov);
     labels.push_back(m_elevation);
-#endif
 #ifdef DMX_ADVANCED_DETECTION
     labels.push_back(m_class);
 #endif

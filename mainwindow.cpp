@@ -106,11 +106,7 @@ public:
         m_label = new QLabel();
         m_label->setBackgroundRole(QPalette::Base);
         m_label->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
-#ifdef DMX_TEST_BUILD
         m_label->setScaledContents(true);
-#else
-        m_label->setScaledContents(false);
-#endif
         m_label->setAlignment(Qt::AlignCenter);
         m_label->setCursor(Qt::OpenHandCursor);
         m_label->installEventFilter(this);
@@ -172,9 +168,7 @@ protected:
         if (k == Qt::Key_Plus || k == Qt::Key_Equal) {
             captureViewportCenterAnchor();
             m_scale *= 1.25;
-#ifdef DMX_TEST_BUILD
             m_scale = qMin(5.0, m_scale);
-#endif
             if (m_onScale) m_onScale(m_scale);
             return;
         }
@@ -276,9 +270,7 @@ private:
 
         m_scale *= (dy > 0) ? 1.25 : (1.0 / 1.25);
         if (m_scale < 0.05) m_scale = 0.05;
-#ifdef DMX_TEST_BUILD
         m_scale = qMin(5.0, m_scale);
-#endif
         if (m_onScale) m_onScale(m_scale);
         event->accept();
         return true;
@@ -326,13 +318,9 @@ private:
         if (!m_label || m_sourceImage.isNull()) return;
         const QImage img = m_histStretch ? histogramStretch(m_sourceImage) : m_sourceImage;
         m_label->setPixmap(QPixmap::fromImage(img));
-#ifdef DMX_TEST_BUILD
         const double displayScale = qBound(0.05, m_scale, 5.0);
         m_label->resize(qMax(1, qRound(img.width() * displayScale)),
                         qMax(1, qRound(img.height() * displayScale)));
-#else
-        m_label->resize(img.size());
-#endif
     }
 
     static QImage histogramStretch(const QImage &src)
@@ -488,25 +476,7 @@ void RoiWorker::process()
         QImage rgb = m_cache->extractFullRgbWindow(fullRgbAngle, 0);
         if (rgb.isNull()) rgb = m_cache->extractThumbRgbWindow(fullRgbAngle, 0);
         if (!rgb.isNull()) {
-#ifdef DMX_TEST_BUILD
             fullRgbScale = qBound(0.05, fullRgbScale, 5.0);
-#else
-            const qint64 maxPixels = 40ll * 1024 * 1024;
-            const int maxDim = 16384;
-            const double srcPixels = (double)rgb.width() * (double)rgb.height();
-            double s = fullRgbScale;
-            if (s < 0.05) s = 0.05;
-            const double maxSByPixels = (srcPixels > 1.0) ? qSqrt((double)maxPixels / srcPixels) : 1.0;
-            const double maxSByDim = (double)maxDim / (double)qMax(rgb.width(), rgb.height());
-            double maxS = qMin(maxSByPixels, maxSByDim);
-            if (maxS < 0.05) maxS = 0.05;
-            if (s > maxS) s = maxS;
-            if (s != 1.0) {
-                QSize targetSize(qMax(1, (int)qRound(rgb.width() * s)), qMax(1, (int)qRound(rgb.height() * s)));
-                rgb = rgb.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
-            }
-            fullRgbScale = s;
-#endif
         }
         emit fullScaledReady(false, fullRgbAngle, fullRgbScale, rgb);
     }
@@ -515,25 +485,7 @@ void RoiWorker::process()
         QImage bw = m_cache->extractFullBwWindow(fullBwAngle, 0);
         if (bw.isNull()) bw = m_cache->extractThumbBwWindow(fullBwAngle, 0);
         if (!bw.isNull() && bw.format() == QImage::Format_Indexed8) bw = bw.convertToFormat(QImage::Format_RGB32);
-#ifdef DMX_TEST_BUILD
         if (!bw.isNull()) fullBwScale = qBound(0.05, fullBwScale, 5.0);
-#else
-        if (!bw.isNull() && fullBwScale != 1.0) {
-            const qint64 maxPixels = 40ll * 1024 * 1024;
-            const int maxDim = 16384;
-            const double srcPixels = (double)bw.width() * (double)bw.height();
-            double s = fullBwScale;
-            if (s < 0.05) s = 0.05;
-            const double maxSByPixels = (srcPixels > 1.0) ? qSqrt((double)maxPixels / srcPixels) : 1.0;
-            const double maxSByDim = (double)maxDim / (double)qMax(bw.width(), bw.height());
-            double maxS = qMin(maxSByPixels, maxSByDim);
-            if (maxS < 0.05) maxS = 0.05;
-            if (s > maxS) s = maxS;
-            QSize targetSize(qMax(1, (int)qRound(bw.width() * s)), qMax(1, (int)qRound(bw.height() * s)));
-            bw = bw.scaled(targetSize, Qt::KeepAspectRatio, Qt::FastTransformation);
-            fullBwScale = s;
-        }
-#endif
         emit fullScaledReady(true, fullBwAngle, fullBwScale, bw);
     }
 
@@ -703,18 +655,11 @@ MainWindow::MainWindow(QWidget *parent) :
 
     QHBoxLayout *bottomLayout = new QHBoxLayout();
     bottomLayout->setSpacing(8);
-#ifdef DMX_TEST_BUILD
-    // The test layout replaces both legacy bottom widgets with the compact
-    // target panel. Keep them alive for the existing update paths, but prevent
-    // un-managed children from appearing over the top-left of the main window.
+    // Keep the legacy widgets alive for existing update paths, but use the
+    // unified target panel as the only visible bottom view.
     radarView->hide();
     radarFeedbackView->hide();
     bottomLayout->addWidget(m_compactTargetRadar, 1);
-#else
-    bottomLayout->addWidget(m_compactTargetRadar, 11);
-    bottomLayout->addWidget(radarView, 10);
-    bottomLayout->addWidget(radarFeedbackView, 10);
-#endif
     layout->addLayout(bottomLayout, 2, 0, 1, 2);
 
     layout->setRowStretch(0, 0);
@@ -739,7 +684,7 @@ MainWindow::MainWindow(QWidget *parent) :
             return;
         }
         const double angle = m_lastRoiAngle;
-        RoiPopupDialog *dlg = new RoiPopupDialog(this, m_replayMode);
+        RoiPopupDialog *dlg = new RoiPopupDialog(this, true);
         dlg->setAttribute(Qt::WA_DeleteOnClose, true);
         dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
         dlg->setWindowTitle(QStringLiteral("RGB ROI  (+/- zoom, 0 reset)"));
@@ -776,7 +721,7 @@ MainWindow::MainWindow(QWidget *parent) :
             return;
         }
         const double angle = m_lastRoiAngle;
-        RoiPopupDialog *dlg = new RoiPopupDialog(this, m_replayMode);
+        RoiPopupDialog *dlg = new RoiPopupDialog(this, true);
         dlg->setAttribute(Qt::WA_DeleteOnClose, true);
         dlg->setWindowFlags(dlg->windowFlags() | Qt::Window);
         dlg->setWindowTitle(QStringLiteral("BW ROI  (+/- zoom, 0 reset)"));
@@ -1877,14 +1822,12 @@ void MainWindow::onCandidateDetected(const QString &stream, double angle, int pa
         rec.panoY = panoY;
         rec.frameX = 0;
         rec.frameY = 0;
-#ifdef DMX_TEST_BUILD
         const int panoramaHeight = qMax(2, cfg.fullHeight);
         const double yNorm = qBound(0.0,
             static_cast<double>(panoY) / static_cast<double>(panoramaHeight - 1),
             1.0);
         rec.elevationAngleDeg = (0.5 - yNorm) * cfg.cameraVerticalFovDeg;
         rec.hasElevationAngle = true;
-#endif
         rec.hasRoiBox = (roiBoxX2 > roiBoxX1 && roiBoxY2 > roiBoxY1);
         rec.roiBoxX1 = roiBoxX1;
         rec.roiBoxY1 = roiBoxY1;

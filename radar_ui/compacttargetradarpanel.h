@@ -26,14 +26,12 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
 
 private:
-    void updateTargetDetails();
     void rebuildTargetList();
     void selectTarget(int index);
     void updatePreview();
     void updatePreviewPixmap();
 
     TargetRadarWidget *m_radar = nullptr;
-    QLabel *m_details = nullptr;
     QListWidget *m_list = nullptr;
     QLabel *m_preview = nullptr;
     QLabel *m_previewDetails = nullptr;

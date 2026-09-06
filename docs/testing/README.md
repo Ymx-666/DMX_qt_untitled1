@@ -11,7 +11,7 @@
 - 跟踪 JSON 文件语法；
 - 跟踪 Shell 脚本语法；
 - Python 模块编译和 `pytest`；
-- AppConfig、PanoramaCache、ManualNegativeStore 三组 QtTest；
+- AppConfig、PanoramaCache、ManualNegativeStore、CompactTargetRadarPanel 四组 QtTest；
 - Git 空白错误检查。
 
 ## 2. 双程序构建
