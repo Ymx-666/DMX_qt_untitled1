@@ -1,13 +1,31 @@
 #include <QtTest/QtTest>
+#include <QComboBox>
 #include <QFile>
 #include <QTemporaryDir>
 
 #include "appconfig.h"
+#include "turntablecontroldialog.h"
+#include "turntabledriver.h"
 
 class AppConfigTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void turntableDefaultsUseEightSecondGear()
+    {
+        const AppConfig cfg;
+        QCOMPARE(cfg.turntableSpeed, 43);
+    }
+
+    void checkedInConfigUsesEightSecondGear()
+    {
+        const QString path = QFINDTESTDATA("dmx_config.json");
+        QVERIFY2(!path.isEmpty(), "dmx_config.json was not found by QtTest");
+        const AppConfig cfg = AppConfig::loadFile(path, false);
+        QVERIFY2(cfg.loadError.isEmpty(), qPrintable(cfg.loadError));
+        QCOMPARE(cfg.turntableSpeed, 43);
+    }
+
     void defaultWindowsPathsDoNotUseOldProjectName()
     {
 #ifdef Q_OS_WIN
@@ -140,6 +158,41 @@ private slots:
 
         QCOMPARE(cfg.turntableOrthoEnabled, false);
         qunsetenv("DMX_TURNTABLE_ORTHO");
+    }
+
+    void automaticStartupGearIsIndependentFromManualSelection()
+    {
+        TurntableDriver driver;
+        TurntableControlDialog dialog(&driver);
+        TurntableControlDialog::Settings configured;
+        configured.serialPort = QStringLiteral("TEST_PORT");
+        configured.baudRate = 9600;
+        configured.direction = QStringLiteral("left");
+        configured.speed = 43;
+        configured.orthoEnabled = false;
+        configured.orthoLength = 4096;
+        configured.feedbackEnabled = true;
+        dialog.applySettings(configured);
+
+        QComboBox *speedCombo = dialog.findChild<QComboBox *>(QStringLiteral("turntableSpeedCombo"));
+        QVERIFY(speedCombo != nullptr);
+        QCOMPARE(speedCombo->currentData().toInt(), 43);
+        const int manualSixSecondIndex = speedCombo->findData(57);
+        QVERIFY(manualSixSecondIndex >= 0);
+        speedCombo->setCurrentIndex(manualSixSecondIndex);
+
+        QCOMPARE(dialog.currentSettings().speed, 57);
+        QCOMPARE(dialog.startupSettings().speed, 43);
+    }
+
+    void eightSecondTurnCommandUsesSpeedByte43()
+    {
+        const QByteArray packet = TurntableDriver::buildCommandPacket(0x00, 0x04, 43, 0x00);
+        QCOMPARE(packet.size(), 7);
+        QCOMPARE(static_cast<unsigned char>(packet.at(0)), static_cast<unsigned char>(0xFF));
+        QCOMPARE(static_cast<unsigned char>(packet.at(3)), static_cast<unsigned char>(0x04));
+        QCOMPARE(static_cast<unsigned char>(packet.at(4)), static_cast<unsigned char>(43));
+        QCOMPARE(static_cast<unsigned char>(packet.at(6)), static_cast<unsigned char>(0x30));
     }
 };
 

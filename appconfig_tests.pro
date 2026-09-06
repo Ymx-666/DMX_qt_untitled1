@@ -1,4 +1,4 @@
-QT += core testlib
+QT += core testlib widgets serialport
 CONFIG += console testcase c++11
 TEMPLATE = app
 TARGET = appconfig_tests
@@ -6,7 +6,10 @@ TARGET = appconfig_tests
 INCLUDEPATH += .
 
 SOURCES += appconfig_tests.cpp \
-    appconfig.cpp
+    appconfig.cpp \
+    turntablecontroldialog.cpp \
+    turntabledriver.cpp
 
-HEADERS += appconfig.h
-
+HEADERS += appconfig.h \
+    turntablecontroldialog.h \
+    turntabledriver.h

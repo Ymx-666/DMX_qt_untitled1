@@ -33,7 +33,9 @@ public:
 
     void applySettings(const Settings &settings);
     Settings currentSettings() const;
+    Settings startupSettings() const;
     bool runWithCurrentSettings(QString *errMsg);
+    bool runWithStartupSettings(Settings *appliedSettings, QString *errMsg);
     void stopAndDisableOrtho();
 
 protected:
@@ -42,11 +44,13 @@ protected:
 private:
     void refreshSerialPorts(bool keepCurrent);
     int nextCommandSequence();
+    bool runWithSettings(const Settings &settings, QString *errMsg);
 
     // ================= 核心驱动指针 =================
     // 注意：Dialog 只“使用”这个驱动，不负责“销毁”它。它的生命周期归 MainWindow 管
     TurntableDriver *m_driver;
     int m_commandSequence = 0;
+    Settings m_startupSettings;
 
     // ================= 界面控件声明 =================
     // 1. 串口配置区

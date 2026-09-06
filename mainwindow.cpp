@@ -852,6 +852,9 @@ MainWindow::MainWindow(QWidget *parent) :
 
     connect(m_driver, &TurntableDriver::lapTimeMeasured, this, [=](double lapTime){
         m_lapTimeLabel->setText(u8s("圈速: %1 秒").arg(lapTime, 0, 'f', 2));
+        addLog(QStringLiteral("TURNTABLE"),
+               u8s("实测圈速=%1秒").arg(lapTime, 0, 'f', 2),
+               QStringLiteral("#569CD6"));
     });
 
     // ====================================================================
@@ -1432,9 +1435,10 @@ void MainWindow::onActionOpenDevice()
     }
 
     QString turntableErr;
-    if (m_ctrlDialog && m_ctrlDialog->runWithCurrentSettings(&turntableErr)) {
-        const TurntableControlDialog::Settings s = m_ctrlDialog->currentSettings();
+    TurntableControlDialog::Settings s;
+    if (m_ctrlDialog && m_ctrlDialog->runWithStartupSettings(&s, &turntableErr)) {
         const QString directionText = (s.direction == QStringLiteral("left")) ? u8s("\xE5\xB7\xA6\xE8\xBD\xAC") : u8s("\xE5\x8F\xB3\xE8\xBD\xAC");
+        const QString gearText = (s.speed == 43) ? u8s("8秒/圈") : u8s("自定义档位");
         m_waitingForRunAngle = true;
         m_isDeviceOpen = false;
         m_zeroAngleInited = false;
@@ -1442,6 +1446,9 @@ void MainWindow::onActionOpenDevice()
         m_angleHistory.clear();
         m_lastAngleDiagMs = 0;
         updateUiState();
+        addLog(QStringLiteral("TURNTABLE"),
+               u8s("自动启动 目标档位=%1 speed=%2").arg(gearText).arg(s.speed),
+               QStringLiteral("#6A9955"));
         addLog(QStringLiteral("TURNTABLE"),
                u8s("\xE8\xBF\x90\xE8\xA1\x8C\x20\xE6\x96\xB9\xE5\x90\x91\x3D\x25\x31\x20\xE9\x80\x9F\xE5\xBA\xA6\x3D\x25\x32\x20\xE4\xB8\xB2\xE5\x8F\xA3\x3D\x25\x33\x20\xE6\xB3\xA2\xE7\x89\xB9\xE7\x8E\x87\x3D\x25\x34\x20\xE6\xAD\xA3\xE4\xBA\xA4\xE8\xBE\x93\xE5\x87\xBA\x3D\xE7\xAD\x89\xE5\xBE\x85\xE8\xBF\x87\xE9\x9B\xB6\xE5\xBC\x80\xE5\x90\xAF\x20\xE8\xA7\x92\xE5\xBA\xA6\xE5\x9B\x9E\xE4\xBC\xA0\x3D\x25\x35")
                    .arg(directionText)

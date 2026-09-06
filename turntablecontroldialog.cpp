@@ -68,7 +68,8 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
     cmbSpeed->addItem(zh("4秒/圈"), 85);
     cmbSpeed->addItem(zh("6秒/圈"), 57);
     cmbSpeed->addItem(zh("8秒/圈"), 43);
-    cmbSpeed->setCurrentIndex(3);
+    cmbSpeed->setObjectName(QStringLiteral("turntableSpeedCombo"));
+    setComboByData(cmbSpeed, 43);
 
     btnLeft = new QPushButton(zh("左转"), this);
     btnRight = new QPushButton(zh("右转"), this);
@@ -157,10 +158,20 @@ TurntableControlDialog::TurntableControlDialog(TurntableDriver *driver, QWidget 
         chkFeedbackEnabled->setChecked(false);
         m_driver->disableFeedback();
     });
+
+    m_startupSettings = currentSettings();
 }
 
 void TurntableControlDialog::applySettings(const TurntableControlDialog::Settings &settings)
 {
+    m_startupSettings = settings;
+    m_startupSettings.serialPort = settings.serialPort.trimmed();
+    m_startupSettings.direction = settings.direction.trimmed().toLower();
+    if (m_startupSettings.direction != QStringLiteral("left")) {
+        m_startupSettings.direction = QStringLiteral("right");
+    }
+    m_startupSettings.speed = qBound(1, settings.speed, 255);
+
     if (!settings.serialPort.trimmed().isEmpty()) {
         const QString port = settings.serialPort.trimmed();
         if (cmbPorts->findText(port) < 0) cmbPorts->addItem(port);
@@ -224,15 +235,36 @@ TurntableControlDialog::Settings TurntableControlDialog::currentSettings() const
     return s;
 }
 
+TurntableControlDialog::Settings TurntableControlDialog::startupSettings() const
+{
+    Settings s = m_startupSettings;
+    if (s.serialPort.isEmpty()) {
+        s.serialPort = currentSettings().serialPort;
+    }
+    return s;
+}
+
 bool TurntableControlDialog::runWithCurrentSettings(QString *errMsg)
+{
+    refreshSerialPorts(true);
+    return runWithSettings(currentSettings(), errMsg);
+}
+
+bool TurntableControlDialog::runWithStartupSettings(Settings *appliedSettings, QString *errMsg)
+{
+    refreshSerialPorts(true);
+    const Settings s = startupSettings();
+    if (appliedSettings) *appliedSettings = s;
+    return runWithSettings(s, errMsg);
+}
+
+bool TurntableControlDialog::runWithSettings(const Settings &s, QString *errMsg)
 {
     if (!m_driver) {
         if (errMsg) *errMsg = zh("转台驱动未就绪");
         return false;
     }
 
-    refreshSerialPorts(true);
-    const Settings s = currentSettings();
     if (!m_driver->isOpen()) {
         if (s.serialPort.isEmpty()) {
             if (errMsg) *errMsg = zh("未选择串口");
