@@ -32,6 +32,49 @@ static double clamp01(double v)
     return qBound(0.0, v, 1.0);
 }
 
+#ifdef DMX_TEST_BUILD
+static QColor testTargetClassColor(const TargetRecord &target)
+{
+    const QString className = target.className.trimmed().toLower();
+    if (className == QStringLiteral("drone")) return QColor(255, 60, 52);
+    return QColor(58, 214, 116);
+}
+
+static void drawTestTargetLegend(QPainter &p, const QRect &bounds, bool compact)
+{
+    p.save();
+    QFont legendFont = p.font();
+    legendFont.setPointSize(compact ? 7 : 9);
+    p.setFont(legendFont);
+
+    const qreal dotRadius = compact ? 2.5 : 3.5;
+    const qreal rowHeight = compact ? 12.0 : 16.0;
+    const qreal x = bounds.left() + (compact ? 5.0 : 8.0);
+    const qreal y = bounds.top() + (compact ? 5.0 : 8.0);
+    const qreal textWidth = compact ? 34.0 : 48.0;
+
+    auto drawLegendItem = [&](qreal itemX, qreal itemY, const QColor &color,
+                              const QString &text, bool filled) {
+        p.setPen(QPen(color, compact ? 1.2 : 1.6));
+        p.setBrush(filled ? QBrush(color) : Qt::NoBrush);
+        const QPointF center(itemX + dotRadius, itemY + rowHeight * 0.5);
+        p.drawEllipse(center, dotRadius, dotRadius);
+        p.setPen(QColor(220, 236, 232, 225));
+        p.drawText(QRectF(itemX + dotRadius * 2.0 + 4.0, itemY,
+                          textWidth, rowHeight),
+                   Qt::AlignLeft | Qt::AlignVCenter, text);
+    };
+
+    const qreal secondColumn = x + (compact ? 58.0 : 78.0);
+    drawLegendItem(x, y, QColor(255, 60, 52), QStringLiteral("无人机"), true);
+    drawLegendItem(secondColumn, y, QColor(58, 214, 116), QStringLiteral("其他"), true);
+    drawLegendItem(x, y + rowHeight, QColor(205, 224, 219), QStringLiteral("实时"), true);
+    drawLegendItem(secondColumn, y + rowHeight, QColor(205, 224, 219),
+                   QStringLiteral("待清理"), false);
+    p.restore();
+}
+#endif
+
 static QImage shiftPanoramaByDegrees(const QImage &src, double deg)
 {
     if (src.isNull() || src.width() <= 1) return src;
@@ -232,13 +275,64 @@ void TargetRadarWidget::paintEvent(QPaintEvent *)
         const double ring = m_compactMode
             ? dot + 3.0 + confidence * 3.0
             : dot + 7.0 + confidence * 7.0;
-        QColor col(255, (int)qRound(58 + (1.0 - freshness) * 118.0), (int)qRound(42 + (1.0 - freshness) * 118.0));
+#ifdef DMX_TEST_BUILD
+        const bool selected = i == m_selected;
+        const bool staleVisual = freshness < 0.34
+            || t.state.compare(QStringLiteral("stale"), Qt::CaseInsensitive) == 0;
+        const bool confirmed = t.state.compare(
+            QStringLiteral("confirmed"), Qt::CaseInsensitive) == 0;
+        const bool justDetected = ageMs <= 1400;
+        QColor col = testTargetClassColor(t);
+        col.setAlpha(staleVisual ? 135 : (int)qRound(205 + freshness * 50.0));
+
+        QPen dotPen(col, confirmed ? 2.4 : 1.8);
+        if (staleVisual) dotPen.setStyle(Qt::DashLine);
+        p.setPen(dotPen);
+        p.setBrush(staleVisual ? Qt::NoBrush : QBrush(col));
+        p.drawEllipse(pt, dot, dot);
+
+        QColor ringColor = col;
+        ringColor.setAlpha(staleVisual ? 105 : 180);
+        QPen ringPen(ringColor, confirmed ? 2.0 : 1.4,
+                     staleVisual ? Qt::DashLine : Qt::SolidLine);
+        p.setPen(ringPen);
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(pt, ring, ring);
+        if (confirmed && !staleVisual) {
+            ringColor.setAlpha(115);
+            p.setPen(QPen(ringColor, 1.0));
+            p.drawEllipse(pt, ring + (m_compactMode ? 2.5 : 4.0),
+                          ring + (m_compactMode ? 2.5 : 4.0));
+        }
+
+        if (justDetected && !staleVisual) {
+            const double phase = (double)(nowMs % 900) / 900.0;
+            const double pulseRadius = ring + (m_compactMode ? 2.0 : 4.0)
+                + phase * (m_compactMode ? 7.0 : 12.0);
+            QColor pulseColor = testTargetClassColor(t);
+            pulseColor.setAlpha((int)qRound((1.0 - phase) * 150.0));
+            p.setPen(QPen(pulseColor, m_compactMode ? 1.2 : 1.8));
+            p.drawEllipse(pt, pulseRadius, pulseRadius);
+        }
+
+        if (selected) {
+            const double focusRadius = ring + (m_compactMode ? 5.0 : 8.0);
+            p.setPen(QPen(QColor(85, 230, 199, 245),
+                          m_compactMode ? 2.0 : 2.8));
+            p.drawEllipse(pt, focusRadius, focusRadius);
+        }
+#else
+        QColor col(255, (int)qRound(58 + (1.0 - freshness) * 118.0),
+                   (int)qRound(42 + (1.0 - freshness) * 118.0));
         col.setAlpha((int)qRound(140 + freshness * 115.0));
         if (i == m_selected) col = QColor(255, 64, 36);
         p.setBrush(col);
         QPen dotPen(col.lighter(135), i == m_selected ? 2.8 : 1.7);
-        if (t.state.compare(QStringLiteral("confirmed"), Qt::CaseInsensitive) == 0) dotPen.setWidthF(i == m_selected ? 3.2 : 2.4);
-        const bool staleVisual = freshness < 0.34 || t.state.compare(QStringLiteral("stale"), Qt::CaseInsensitive) == 0;
+        if (t.state.compare(QStringLiteral("confirmed"), Qt::CaseInsensitive) == 0) {
+            dotPen.setWidthF(i == m_selected ? 3.2 : 2.4);
+        }
+        const bool staleVisual = freshness < 0.34
+            || t.state.compare(QStringLiteral("stale"), Qt::CaseInsensitive) == 0;
         if (staleVisual) {
             col.setAlpha(qMin(col.alpha(), 150));
             p.setBrush(col);
@@ -247,12 +341,17 @@ void TargetRadarWidget::paintEvent(QPaintEvent *)
         p.setPen(dotPen);
         p.drawEllipse(pt, dot, dot);
         p.setBrush(Qt::NoBrush);
-        p.drawEllipse(pt, i == m_selected ? ring + 4.0 : ring, i == m_selected ? ring + 4.0 : ring);
+        p.drawEllipse(pt, i == m_selected ? ring + 4.0 : ring,
+                      i == m_selected ? ring + 4.0 : ring);
+#endif
         if (!m_compactMode) {
             p.setPen(QColor(245, 235, 230, i == m_selected ? 255 : 215));
             p.drawText(pt + QPointF(16, -8), t.id);
         }
     }
+#ifdef DMX_TEST_BUILD
+    drawTestTargetLegend(p, rect(), m_compactMode);
+#endif
 }
 
 void TargetRadarWidget::mousePressEvent(QMouseEvent *event)
@@ -309,7 +408,26 @@ void TargetRadarWidget::resizeEvent(QResizeEvent *)
 void TargetRadarWidget::advanceScanAnimation()
 {
     const double diff = shortestAngleDelta(m_displayScanAngle, m_targetScanAngle);
+#ifdef DMX_TEST_BUILD
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    bool targetPulseActive = false;
+    for (const TargetRecord &target : m_targets) {
+        const QDateTime last = target.lastTime.isValid() ? target.lastTime : target.time;
+        const qint64 ageMs = last.isValid()
+            ? last.msecsTo(QDateTime::fromMSecsSinceEpoch(nowMs))
+            : -1;
+        if (ageMs >= 0 && ageMs <= 1400) {
+            targetPulseActive = true;
+            break;
+        }
+    }
+    if (qAbs(diff) < 0.05) {
+        if (targetPulseActive) update();
+        return;
+    }
+#else
     if (qAbs(diff) < 0.05) return;
+#endif
 
     const double step = qBound(-5.0, diff * 0.35, 5.0);
     m_displayScanAngle = norm360(m_displayScanAngle + step);
