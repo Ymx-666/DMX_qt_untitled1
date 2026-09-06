@@ -460,7 +460,7 @@ AppConfig::AppConfig()
       replayMode(false),
       turntableBaudRate(9600),
       turntableDirection(QStringLiteral("left")),
-      turntableSpeed(57),
+      turntableSpeed(43),
       turntableOrthoEnabled(false),
       turntableOrthoLength(4096),
       turntableFeedbackEnabled(true),

@@ -115,6 +115,18 @@ bool TurntableDriver::sendCommand(unsigned char cmd1, unsigned char cmd2, unsign
 {
     if (!m_serialPort->isOpen()) return false;
 
+    const QByteArray packet = buildCommandPacket(cmd1, cmd2, data1, data2);
+    const qint64 written = m_serialPort->write(packet);
+    if (written != packet.size()) return false;
+    m_serialPort->flush();
+    return true;
+}
+
+QByteArray TurntableDriver::buildCommandPacket(unsigned char cmd1,
+                                               unsigned char cmd2,
+                                               unsigned char data1,
+                                               unsigned char data2)
+{
     QByteArray packet;
     packet.resize(7);
     packet[0] = 0xFF;
@@ -125,11 +137,7 @@ bool TurntableDriver::sendCommand(unsigned char cmd1, unsigned char cmd2, unsign
     packet[5] = data2;
 
     packet[6] = (packet[1] + packet[2] + packet[3] + packet[4] + packet[5]) & 0xFF;
-
-    const qint64 written = m_serialPort->write(packet);
-    if (written != packet.size()) return false;
-    m_serialPort->flush();
-    return true;
+    return packet;
 }
 
 // ================= 运动控制与重置计时 =================

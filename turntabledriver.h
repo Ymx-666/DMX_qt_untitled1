@@ -15,6 +15,10 @@ public:
     bool openPort(const QString &portName, int baudRate = 9600);
     void closePort();
     bool isOpen() const;
+    static QByteArray buildCommandPacket(unsigned char cmd1,
+                                         unsigned char cmd2,
+                                         unsigned char data1,
+                                         unsigned char data2);
 
     void turnLeft(int speed);
     void turnRight(int speed);
