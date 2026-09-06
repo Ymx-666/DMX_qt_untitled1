@@ -1,7 +1,9 @@
 # DMX 当前交接索引
 
-最后核对：2026-09-04
+最后核对：2026-09-06
 项目目录：`/home/sht/work/DMX_qt`
+
+新对话开始处理本项目时，先读取根目录 `AGENTS.md`。每次改动的完整执行步骤见 `docs/项目管理/DMX每次改动标准流程.md`。
 
 ## 1. 当前基准
 
@@ -79,6 +81,7 @@ qmake compacttargetradarpanel_tests.pro && make && ./compacttargetradarpanel_tes
 ## 6. 开发约束
 
 - 新任务使用 `Issue -> 开发分支 -> Commit -> PR -> 测试报告 -> Run ID -> Release`。
+- 具体分支、测试、报告、合并、发布和回滚步骤以根目录 `AGENTS.md` 及 `docs/项目管理/DMX每次改动标准流程.md` 为准。
 - 不直接在 `main` 上开发或强制推送。
 - 算法改动必须与 2026-07-23 固定回放基准对比。
 - 设备端口、挂载、配置、模型和数据版本变化必须在 Issue/PR 中单独说明。
