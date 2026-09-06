@@ -63,10 +63,11 @@ DMX 和 DMX_test 共用同一套 C++ 源码和 `dmx_config.json`：
 # Python 测试
 python3 -m pytest -q tests
 
-# 三组 C++ 测试
+# 四组 C++ 测试
 qmake appconfig_tests.pro && make && ./appconfig_tests
 qmake panoramacache_tests.pro && make && ./panoramacache_tests
 qmake manualnegativestore_tests.pro && make && ./manualnegativestore_tests
+qmake compacttargetradarpanel_tests.pro && make && ./compacttargetradarpanel_tests
 
 # 完整构建
 ./build_linux.sh

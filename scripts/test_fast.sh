@@ -12,7 +12,7 @@ usage()
     cat <<'EOF'
 Usage: scripts/test_fast.sh [--run-id ID] [--jobs N]
 
-Runs JSON and shell validation, Python tests, and the three Qt unit suites.
+Runs JSON and shell validation, Python tests, and the four Qt unit suites.
 Results are written below test-results/ unless DMX_TEST_RESULTS_ROOT is set.
 EOF
 }
@@ -126,6 +126,7 @@ dmx_run_logged python_tests run_python_tests
 dmx_run_logged appconfig_qttest run_qt_test appconfig_tests.pro appconfig_tests
 dmx_run_logged panoramacache_qttest run_qt_test panoramacache_tests.pro panoramacache_tests
 dmx_run_logged manualnegative_qttest run_qt_test manualnegativestore_tests.pro manualnegativestore_tests
+dmx_run_logged compacttargetradar_qttest run_qt_test compacttargetradarpanel_tests.pro compacttargetradarpanel_tests
 
 DMX_TEST_SUITE_PASSED=1
 printf '\nFAST TEST PASS\nRun ID: %s\nResults: %s\n' "$RUN_ID" "$DMX_TEST_RESULT_DIR"
